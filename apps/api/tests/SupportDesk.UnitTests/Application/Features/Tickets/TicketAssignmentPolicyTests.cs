@@ -112,4 +112,43 @@ public sealed class TicketAssignmentPolicyTests
     private static AgentDto Agent(int id, int open = 0, int capacity = 3, bool active = true,
         IReadOnlyList<CategorySummaryDto>? specializations = null) =>
         new(id, $"Agent {id}", $"agent{id}@example.test", active, capacity, open, specializations ?? []);
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Escalation_RetainsCurrentAgentIncludingExactCapacity(int open)
+    {
+        var result = policy.SelectAgentForEscalation(general, [Agent(9, open: open), Agent(1)], 9);
+        Assert.Equal(9, result.AssignedAgentId);
+        Assert.Contains("Retained", result.Reason);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 4)]
+    public void Escalation_ReplacesInactiveOrOverCapacityIncumbent(bool active, int open)
+    {
+        var result = policy.SelectAgentForEscalation(general, [Agent(1, open: open, active: active), Agent(2)], 1);
+        Assert.Equal(2, result.AssignedAgentId);
+    }
+
+    [Fact]
+    public void Escalation_ReplacesIncumbentMissingRequiredSpecialization()
+    {
+        var result = policy.SelectAgentForEscalation(specialist,
+            [Agent(1), Agent(2, specializations: [new CategorySummaryDto(specialist.Id, specialist.Name)])], 1);
+        Assert.Equal(2, result.AssignedAgentId);
+    }
+
+    [Fact]
+    public void Escalation_SelectsOwnerForUnassignedTicket()
+    {
+        Assert.Equal(1, policy.SelectAgentForEscalation(general, [Agent(2), Agent(1)], null).AssignedAgentId);
+    }
+
+    [Fact]
+    public void Escalation_NoEligibleReplacementReturnsUnassigned()
+    {
+        Assert.Null(policy.SelectAgentForEscalation(general, [Agent(1, active: false)], 1).AssignedAgentId);
+    }
 }

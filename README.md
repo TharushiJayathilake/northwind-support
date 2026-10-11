@@ -96,6 +96,7 @@ provider-specific behavior.
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters combine with AND and are applied in the database before counting and paging. Search matches title, reference or customer name. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
+| `POST /api/tickets/{id}/escalate` | Escalate one priority level; body contains `reason` (5-500 characters) and `escalatedBy` (1-100). Returns 200 with `ticket` and `escalation`; 400 for invalid input, 404 for unknown ticket, 409 for Critical/Resolved/Closed tickets. |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
@@ -133,10 +134,23 @@ Migration `20261011095659_AddTicketEscalations` adds only this table, its checks
 The entity has no public setters or mutation methods. `SupportDbContext` rejects tracked
 updates/deletes through both synchronous and asynchronous saves. This is application-level
 append-only protection, not a database trigger: raw SQL or bulk operations can bypass it and
-must not be used to rewrite history. No escalation endpoint or ticket priority change is
-implemented yet. SQL Server mapping tests can be run with `SUPPORTDESK_TEST_SQLSERVER` and
+must not be used to rewrite history. SQL Server mapping tests can be run with `SUPPORTDESK_TEST_SQLSERVER` and
 filter `FullyQualifiedName~TicketEscalationMappingTests`; each case migrates and deletes only
 its own `SupportDeskEscalationTest_<guid>` database.
+
+The escalation handler captures UTC time once, calculates the next priority's SLA from that
+time, and retains an eligible incumbent after excluding this ticket from their capacity
+comparison. Otherwise it selects a replacement or leaves the ticket unassigned. Ticket
+changes and a new audit snapshot share one EF `SaveChangesAsync` transaction. Tests inject
+database failures into ticket updates and audit inserts and verify neither is committed.
+`TicketEscalationApiTests` also supports isolated SQL Server runs, using only disposable
+`SupportDeskEscalationApiTest_<guid>` databases. History retrieval is not implemented yet.
+
+`escalatedBy` is currently caller-supplied, not authenticated; Task 3 will replace it with
+JWT identity. Atomic saves do not prevent two concurrent requests from reading the same
+ticket version and producing stale updates/history. There is no optimistic concurrency
+token or locking spanning reads and writes. Cross-request assignment capacity is also
+subject to the previously documented race; concurrency safety is not claimed.
 
 ### Automatic triage verification
 

@@ -121,4 +121,26 @@ public sealed class Ticket : AggregateRoot
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
     }
+
+    public TicketPriority GetEscalatedPriority()
+    {
+        if (Status is TicketStatus.Resolved or TicketStatus.Closed)
+            throw new BusinessRuleViolationException($"Ticket {Reference} is {Status} and cannot be escalated.");
+        return Priority switch
+        {
+            TicketPriority.Low => TicketPriority.Medium,
+            TicketPriority.Medium => TicketPriority.High,
+            TicketPriority.High => TicketPriority.Critical,
+            TicketPriority.Critical => throw new BusinessRuleViolationException($"Ticket {Reference} is already Critical and cannot be escalated."),
+            _ => throw new BusinessRuleViolationException($"Ticket {Reference} has an invalid priority.")
+        };
+    }
+
+    public void Escalate(DateTime dueAtUtc, int? agentId, DateTime nowUtc)
+    {
+        var nextPriority = GetEscalatedPriority();
+        SetDueDate(dueAtUtc, nowUtc);
+        Priority = nextPriority;
+        AssignTo(agentId, nowUtc);
+    }
 }

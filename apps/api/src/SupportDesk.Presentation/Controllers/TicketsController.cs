@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
@@ -38,6 +39,12 @@ public sealed class TicketsController : ControllerBase
 
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
+
+    /// <summary>Escalates one priority level and records the decision atomically.</summary>
+    [HttpPost("{id:int}/escalate")]
+    public Task<EscalateTicketResponse> Escalate(int id, EscalateTicketRequest request,
+        [FromServices] EscalateTicketCommandHandler handler, CancellationToken ct) =>
+        handler.HandleAsync(id, request, ct);
 
     /// <summary>Moves a ticket to another status.</summary>
     [HttpPatch("{id:int}/status")]

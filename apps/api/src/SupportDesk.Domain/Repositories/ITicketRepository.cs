@@ -15,4 +15,7 @@ public interface ITicketRepository
     Task<string> NextReferenceAsync(CancellationToken ct);
 
     Task AddAsync(Ticket ticket, CancellationToken ct);
+
+    /// <summary>Adds audit history to the same unit of work as the tracked ticket.</summary>
+    Task AddEscalationAsync(TicketEscalation escalation, CancellationToken ct);
 }

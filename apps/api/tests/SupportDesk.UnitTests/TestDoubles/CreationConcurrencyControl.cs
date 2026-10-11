@@ -40,6 +40,7 @@ public sealed class CreationConcurrencyControl
     {
         public Task<Ticket?> GetByIdAsync(int id, CancellationToken ct) => inner.GetByIdAsync(id, ct);
         public Task AddAsync(Ticket ticket, CancellationToken ct) => inner.AddAsync(ticket, ct);
+        public Task AddEscalationAsync(TicketEscalation escalation, CancellationToken ct) => inner.AddEscalationAsync(escalation, ct);
 
         public async Task<string> NextReferenceAsync(CancellationToken ct)
         {

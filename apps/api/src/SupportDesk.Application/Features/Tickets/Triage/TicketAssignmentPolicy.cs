@@ -38,6 +38,17 @@ public sealed class TicketAssignmentPolicy
         return new AssignmentDecision(null, reason);
     }
 
+    public AssignmentDecision SelectAgentForEscalation(Category category, IReadOnlyList<AgentDto> agents, int? currentAgentId)
+    {
+        ArgumentNullException.ThrowIfNull(category);
+        ArgumentNullException.ThrowIfNull(agents);
+        var current = agents.FirstOrDefault(agent => agent.Id == currentAgentId);
+        // Escalatable tickets are open and already count toward their current owner's workload.
+        if (current is not null && IsEligible(current with { OpenTicketCount = Math.Max(0, current.OpenTicketCount - 1) }, category))
+            return new AssignmentDecision(current.Id, $"Retained current agent {current.FullName}; this ticket already counts toward their workload.");
+        return SelectAgent(category, agents);
+    }
+
     private static Ineligibility GetIneligibility(AgentDto agent, Category category)
     {
         if (!agent.IsActive) return Ineligibility.Inactive;
