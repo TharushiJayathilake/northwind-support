@@ -13,6 +13,11 @@
     <ProjectReference Include="../../src/SupportDesk.Application/SupportDesk.Application.csproj" />
     <ProjectReference Include="../../src/SupportDesk.Domain/SupportDesk.Domain.csproj" />
     <ProjectReference Include="../../src/SupportDesk.Infrastructure/SupportDesk.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/SupportDesk.Presentation/SupportDesk.Presentation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../src/SupportDesk.Presentation/appsettings.Development.json" Link="sla-appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

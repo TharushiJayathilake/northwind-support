@@ -7,6 +7,7 @@ import type {
   TicketStatus,
 } from '../../../types/api';
 import { humanize } from '../../../lib/format';
+import { slaLabels, slaStatuses } from '../slaPresentation';
 
 const statuses: TicketStatus[] = ['New', 'Open', 'InProgress', 'Resolved', 'Closed'];
 const priorities: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
@@ -55,7 +56,7 @@ export function TicketFilters({
             id="filter-status"
             value={filters.status ?? ''}
             onChange={(event) =>
-              onChange({ status: (event.target.value || undefined) as TicketStatus | undefined })
+              onChange({ status: statuses.find((status) => status === event.target.value) })
             }
           >
             <option value="">All statuses</option>
@@ -75,7 +76,7 @@ export function TicketFilters({
             id="filter-priority"
             value={filters.priority ?? ''}
             onChange={(event) =>
-              onChange({ priority: (event.target.value || undefined) as TicketPriority | undefined })
+              onChange({ priority: priorities.find((priority) => priority === event.target.value) })
             }
           >
             <option value="">All priorities</option>
@@ -89,6 +90,17 @@ export function TicketFilters({
       </div>
 
       <div className="filters__row">
+        <div className="field">
+          <label className="field__label" htmlFor="filter-sla">SLA status</label>
+          <select
+            id="filter-sla"
+            value={filters.slaStatus ?? ''}
+            onChange={(event) => onChange({ slaStatus: slaStatuses.find((status) => status === event.target.value) })}
+          >
+            <option value="">All SLA statuses</option>
+            {slaStatuses.map((status) => <option key={status} value={status}>{slaLabels[status].text}</option>)}
+          </select>
+        </div>
         <div className="field">
           <label className="field__label" htmlFor="filter-category">
             Category
@@ -152,10 +164,11 @@ export function TicketFilters({
             value={`${filters.sortBy}:${filters.sortDirection}`}
             onChange={(event) => {
               const [sortBy, sortDirection] = event.target.value.split(':');
-              onChange({
-                sortBy: sortBy as Filters['sortBy'],
-                sortDirection: sortDirection as Filters['sortDirection'],
-              });
+              if ((sortBy === 'createdAtUtc' || sortBy === 'updatedAtUtc' || sortBy === 'dueAtUtc' ||
+                   sortBy === 'priority' || sortBy === 'status') &&
+                  (sortDirection === 'asc' || sortDirection === 'desc')) {
+                onChange({ sortBy, sortDirection });
+              }
             }}
           >
             <option value="createdAtUtc:desc">Newest first</option>

@@ -103,12 +103,44 @@ public sealed class Ticket : AggregateRoot
     }
 
     /// <summary>
-    /// Hands the ticket to an agent, or takes it back off them when <paramref name="agentId"/>
-    /// is null. Whether the agent may take it is checked by the caller, which can see agents.
+    /// Applies a future UTC deadline calculated by the caller.
     /// </summary>
+    public void SetDueDate(DateTime dueAtUtc, DateTime nowUtc)
+    {
+        if (dueAtUtc.Kind != DateTimeKind.Utc || nowUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Deadline and update timestamps must be UTC.");
+        if (dueAtUtc <= nowUtc)
+            throw new ArgumentOutOfRangeException(nameof(dueAtUtc), "The deadline must be after the update timestamp.");
+        DueAtUtc = dueAtUtc;
+        UpdatedAtUtc = nowUtc;
+    }
+
+    /// <summary>Applies the owner selected or cleared by the caller.</summary>
     public void AssignTo(int? agentId, DateTime nowUtc)
     {
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
+    }
+
+    public TicketPriority GetEscalatedPriority()
+    {
+        if (Status is TicketStatus.Resolved or TicketStatus.Closed)
+            throw new BusinessRuleViolationException($"Ticket {Reference} is {Status} and cannot be escalated.");
+        return Priority switch
+        {
+            TicketPriority.Low => TicketPriority.Medium,
+            TicketPriority.Medium => TicketPriority.High,
+            TicketPriority.High => TicketPriority.Critical,
+            TicketPriority.Critical => throw new BusinessRuleViolationException($"Ticket {Reference} is already Critical and cannot be escalated."),
+            _ => throw new BusinessRuleViolationException($"Ticket {Reference} has an invalid priority.")
+        };
+    }
+
+    public void Escalate(DateTime dueAtUtc, int? agentId, DateTime nowUtc)
+    {
+        var nextPriority = GetEscalatedPriority();
+        SetDueDate(dueAtUtc, nowUtc);
+        Priority = nextPriority;
+        AssignTo(agentId, nowUtc);
     }
 }

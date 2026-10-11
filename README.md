@@ -96,6 +96,8 @@ provider-specific behavior.
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters combine with AND and are applied in the database before counting and paging. Search matches title, reference or customer name. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
+| `POST /api/tickets/{id}/escalate` | Escalate one priority level; body contains `reason` (5-500 characters) and `escalatedBy` (1-100). Returns 200 with `ticket` and `escalation`; 400 for invalid input, 404 for unknown ticket, 409 for Critical/Resolved/Closed tickets. |
+| `GET /api/tickets/{id}/escalations` | Read-only audit history ordered by escalation timestamp descending, then ID descending. Returns 200 with an array (empty for an existing ticket without history), or 404 for an unknown ticket. |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
@@ -105,6 +107,124 @@ Errors are `ProblemDetails`: `400` validation, `404` not found, `409` conflict o
 and 40 tickets across every status, priority and SLA state.
 
 ## Troubleshooting
+
+### Automatic triage limitations
+
+Ticket creation applies configured priority/SLA rules and selects an agent from the current
+database workload. The creation response includes `triage` reasons; these explanations are
+not persisted and are not returned on later GET requests.
+
+Capacity is not atomically enforced across concurrent requests. `SaveChangesAsync` commits
+the ticket values together, but the earlier workload read is outside that transaction. Two
+requests can observe one remaining slot and both choose the same agent. The schema has no
+capacity constraint or reservation mechanism. Reliable enforcement requires a database-wide
+transaction/locking strategy spanning workload selection and insert, coordinated with other
+assignment/status writers and SQL Server retry handling. A process-local lock would not
+protect multiple API instances. Reference generation also retains its existing concurrent
+collision risk (both requests can compute the same next reference). No concurrency-safety
+claim is made for this implementation.
+
+### Escalation audit storage
+
+`TicketEscalations` stores immutable before/after snapshots, with a required ticket reference
+and optional previous/next agent references. All three foreign keys restrict deletion, so
+deleting a ticket or referenced agent cannot erase its audit history. The ticket index supports
+history lookup; agent indexes support foreign-key checks. Dates use UTC and `datetime2(3)`.
+Migration `20261011095659_AddTicketEscalations` adds only this table, its checks and indexes.
+
+The entity has no public setters or mutation methods. `SupportDbContext` rejects tracked
+updates/deletes through both synchronous and asynchronous saves. This is application-level
+append-only protection, not a database trigger: raw SQL or bulk operations can bypass it and
+must not be used to rewrite history. SQL Server mapping tests can be run with `SUPPORTDESK_TEST_SQLSERVER` and
+filter `FullyQualifiedName~TicketEscalationMappingTests`; each case migrates and deletes only
+its own `SupportDeskEscalationTest_<guid>` database.
+
+The escalation handler captures UTC time once, calculates the next priority's SLA from that
+time, and retains an eligible incumbent after excluding this ticket from their capacity
+comparison. Otherwise it selects a replacement or leaves the ticket unassigned. Ticket
+changes and a new audit snapshot share one EF `SaveChangesAsync` transaction. Tests inject
+database failures into ticket updates and audit inserts and verify neither is committed.
+`TicketEscalationApiTests` also supports isolated SQL Server runs, using only disposable
+`SupportDeskEscalationApiTest_<guid>` databases. History retrieval uses no-tracking
+database filtering, ordering and DTO projection, without changing stored records.
+
+`escalatedBy` is currently caller-supplied, not authenticated; Task 3 will replace it with
+JWT identity. Atomic saves do not prevent two concurrent requests from reading the same
+ticket version and producing stale updates/history. There is no optimistic concurrency
+token or locking spanning reads and writes. Cross-request assignment capacity is also
+subject to the previously documented race; concurrency safety is not claimed.
+
+### Dynamic SLA status
+
+SLA status is calculated on each ticket read, never persisted. Each query captures
+`IClock.UtcNow` once. The current window starts at the latest escalation timestamp
+(ordered by timestamp then ID), or ticket creation when no escalation exists, and
+ends at the stored deadline. This preserves the applied Premium multiplier and minimum
+even if configuration changes later. Assignment/status update timestamps do not restart it.
+`AtRiskThresholdPercent` remains configurable: remaining ticks at or below that percentage
+of the current window are AtRisk, including the exact deadline; only time after the
+deadline is Breached. A recorded resolution on/before the deadline is Met, otherwise Breached.
+Closed tickets use their preserved resolution time. Legacy terminal tickets with no
+resolution time, tickets with no deadline, and invalid non-positive open windows cannot
+be assessed and return NotApplicable. No completion timestamp is guessed.
+The evaluator receives explicit UTC timestamps and a validated threshold, keeping Domain
+independent of clock/configuration services. Query projection retrieves the latest start
+in SQL and evaluates status at the final projection. The optional `slaStatus` query parameter
+accepts `NotApplicable`, `WithinSla`, `AtRisk`, `Breached`, or `Met`. It combines with other
+filters using AND and filters in SQL before counting, sorting and paging. Classification
+rules are shared with the evaluator through an expression tree; no client-side filtering
+or persisted status is used. SQL Server durations use day boundaries and time parts,
+avoiding small integer DATEDIFF overflows and retaining sub-millisecond clock precision.
+SQLite coverage uses millisecond-precision stored dates, matching this application's
+SQL Server `datetime2(3)` columns; it is not proof of SQL Server translation.
+There is no separate SLA-start column or migration. Existing atomic escalation history
+provides the restart time; legacy due dates without history are assumed to start at creation.
+Concurrent escalation limitations described above remain unchanged.
+
+`TicketSlaFilteringTests` defaults to SQLite. Set `SUPPORTDESK_TEST_SQLSERVER` to a SQL
+Server connection string and run it with the same test filter to verify SQL Server behavior.
+Each case creates, migrates and drops only its own `SupportDeskSlaFilterTest_<guid>` database.
+Tests inspect executed count/page SQL and compare filtered membership with the evaluator.
+
+### Automatic triage verification
+
+The normal backend suite uses SQLite for repeatable relational query and HTTP creation
+tests. The same `TicketCreationTests` can also run against SQL Server with the existing
+migrations. Set a server connection string (create/drop database permission is required):
+
+```powershell
+$env:SUPPORTDESK_TEST_SQLSERVER = 'Server=localhost\SQLEXPRESS;Integrated Security=True;TrustServerCertificate=True;Encrypt=False'
+dotnet test apps/api/tests/SupportDesk.UnitTests/SupportDesk.UnitTests.csproj -c Release --filter FullyQualifiedName~TicketCreationTests
+Remove-Item Env:SUPPORTDESK_TEST_SQLSERVER
+```
+
+Each case overrides the supplied database name with a unique
+`SupportDeskTriageTest_<guid>` database and deletes only that database during cleanup.
+Existing application data is not seeded, changed or deleted. SQL Server-only tests are
+explicitly skipped when the environment variable is absent; ordinary cases use SQLite.
+
+Coverage is split between existing policy tests (all priority/tier combinations, flags,
+eligibility, fewest-open selection and ID ties), `AgentQueriesTests` (real open-count and
+specialization projection), configuration/domain tests, and HTTP creation tests (201,
+response reasons, persisted values, custom windows/floor, unavailable agents, 400 and 404).
+Command tests also verify that query/save failures propagate instead of returning success.
+
+SQL Server Express verification on 2026-10-11 passed all 17 HTTP creation/concurrency cases.
+This is SQL Server verification, separate from the default SQLite suite. Cleanup was
+confirmed with zero remaining `SupportDeskTriageTest_` databases.
+
+Two test-only scheduling gates reproduce unsafe interleavings through real HTTP requests:
+
+- `Post_ConcurrentStaleWorkloadsCanExceedCapacity` holds two completed workload reads,
+  then lets reference reads/inserts proceed sequentially. Both requests return 201 with
+  distinct references, but assign two open tickets to an agent whose capacity is one.
+- `Post_ConcurrentReferenceReadsCanCauseUniqueKeyConflict` holds both generated references
+  before either insert. One request returns 201; the other encounters SQL Server duplicate
+  key error 2601/2627 and returns 500. Only one ticket is saved.
+
+These are diagnostic tests that assert the current limitations, not proof of safety.
+The decorators only control timing and collect errors; production code is unchanged.
+They must be updated when proper cross-request protection is implemented.
 
 | Symptom | Fix |
 | --- | --- |

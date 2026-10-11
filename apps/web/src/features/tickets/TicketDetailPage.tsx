@@ -1,20 +1,29 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { AssignAgentControl } from './components/AssignAgentControl';
+import { EscalationForm } from './components/EscalationForm';
+import { EscalationHistory } from './components/EscalationHistory';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
+import { TriageResult } from './components/TriageResult';
+import { readCreationResult } from './creationResult';
 import { useTicket } from './hooks/useTicket';
+import { useTicketEscalations } from './hooks/useTicketEscalations';
 
 export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
   const ticketId = Number(id);
+  const location = useLocation();
+  const navigationState: unknown = location.state;
+  const created = readCreationResult(navigationState, ticketId);
 
   const { data: ticket, isLoading, error, reload, setData } = useTicket(ticketId);
   const reference = useReferenceData();
+  const history = useTicketEscalations(ticketId);
 
-  if (Number.isNaN(ticketId)) {
+  if (!Number.isSafeInteger(ticketId) || ticketId <= 0) {
     return <ErrorMessage message="That is not a valid ticket reference." />;
   }
 
@@ -42,6 +51,7 @@ export function TicketDetailPage() {
       </header>
 
       {error && <ErrorMessage message={error} onRetry={() => void reload()} />}
+      {created && <TriageResult result={created} />}
 
       <div className="detail-layout">
         <div className="detail-layout__main">
@@ -51,6 +61,12 @@ export function TicketDetailPage() {
           </div>
 
           <StatusActions ticket={ticket} onUpdated={setData} />
+          <EscalationForm ticket={ticket} onConflict={reload} onEscalated={async (response) => {
+            setData(response.ticket);
+            await Promise.all([reload(), history.reload()]);
+          }} />
+          <EscalationHistory history={history.data} isLoading={history.isLoading} error={history.error}
+            agents={reference.data?.agents ?? []} onRetry={() => void history.reload()} />
         </div>
 
         <aside className="detail-layout__side">

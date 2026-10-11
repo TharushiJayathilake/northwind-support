@@ -348,6 +348,22 @@ textarea[aria-invalid='true'] {
   white-space: pre-wrap;
 }
 
+.escalation-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.escalation-history__entry {
+  border-top: 1px solid var(--colour-border);
+  padding: var(--gap) 0;
+  overflow-wrap: anywhere;
+}
+
+.escalation-history__entry .description {
+  margin-top: var(--gap);
+}
+
 .spinner {
   color: var(--colour-muted);
 }
@@ -442,4 +458,9 @@ textarea[aria-invalid='true'] {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.triage-result {
+  margin-block: 1rem;
+  overflow-wrap: anywhere;
 }
