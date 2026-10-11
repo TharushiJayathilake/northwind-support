@@ -1,4 +1,4 @@
-import type { PagedResult, TicketListItem } from '../types/api';
+import type { EscalateTicketResponse, PagedResult, TicketDetail, TicketListItem } from '../types/api';
 
 /** A list row with sensible defaults, so tests only state what they care about. */
 export function ticketListItem(overrides: Partial<TicketListItem> = {}): TicketListItem {
@@ -28,4 +28,19 @@ export function page(items: TicketListItem[]): PagedResult<TicketListItem> {
     totalCount: items.length,
     totalPages: 1,
   };
+}
+
+export function ticketDetail(overrides: Partial<TicketDetail> = {}): TicketDetail {
+  const row = ticketListItem();
+  return { ...row, description: 'Support request details',
+    customer: { ...row.customer, email: 'customer@example.test', phone: null },
+    category: { ...row.category, requiresSpecialist: false }, ...overrides };
+}
+
+export function escalatedTicket(): EscalateTicketResponse {
+  const ticket = ticketDetail({ priority: 'Critical', dueAtUtc: '2026-09-26T14:00:00Z',
+    assignedAgent: { id: 9, fullName: 'New owner' }, slaStatus: 'WithinSla' });
+  return { ticket, escalation: { id: 1, ticketId: ticket.id, fromPriority: 'High', toPriority: 'Critical',
+    fromAgentId: 4, toAgentId: 9, fromDueAtUtc: '2026-09-24T16:12:00Z', toDueAtUtc: ticket.dueAtUtc,
+    reason: 'Impact increased', escalatedBy: 'Temporary actor', escalatedAtUtc: '2026-09-26T10:00:00Z' } };
 }

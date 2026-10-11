@@ -3,6 +3,7 @@ import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { AssignAgentControl } from './components/AssignAgentControl';
+import { EscalationForm } from './components/EscalationForm';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
 import { useTicket } from './hooks/useTicket';
@@ -51,6 +52,11 @@ export function TicketDetailPage() {
           </div>
 
           <StatusActions ticket={ticket} onUpdated={setData} />
+          <EscalationForm ticketId={ticket.id} onEscalated={async (response) => {
+            setData(response.ticket);
+            // Step 55 can refresh its history query through this same confirmed-success callback.
+            await reload();
+          }} />
         </div>
 
         <aside className="detail-layout__side">

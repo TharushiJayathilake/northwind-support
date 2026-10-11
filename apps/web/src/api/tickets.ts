@@ -1,5 +1,7 @@
 import type {
   CreateTicketPayload,
+  EscalateTicketPayload,
+  EscalateTicketResponse,
   PagedResult,
   TicketDetail,
   TicketFilters,
@@ -53,6 +55,12 @@ export const ticketsApi = {
     request<TicketDetail>(`/tickets/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
+    }),
+
+  escalateTicket: (id: number, payload: EscalateTicketPayload) =>
+    request<EscalateTicketResponse>(`/tickets/${id}/escalate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   assignAgent: (id: number, agentId: number | null) =>
