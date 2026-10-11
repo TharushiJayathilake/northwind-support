@@ -91,4 +91,16 @@ public class RaiseTicketCommandHandlerTests
         Assert.Equal(FixedClock.DefaultNow, context.AddedTicket!.CreatedAtUtc);
         Assert.Equal(FixedClock.DefaultNow.AddHours(24), context.AddedTicket.DueAtUtc);
     }
+
+    [Fact]
+    public async Task HandleAsync_SaveFailurePropagatesWithoutReturningSuccess()
+    {
+        var context = new TicketCommandTestContext();
+        context.UnitOfWork.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Database save failed"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            context.RaiseTicket.HandleAsync(Request(), CancellationToken.None));
+        Assert.Equal("Database save failed", error.Message);
+        context.TicketQueries.Verify(query => query.GetDetailAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never());
+    }
 }

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Data.Sqlite;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,7 @@ using Microsoft.Extensions.Logging;
 using SupportDesk.Application;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Tickets;
+using SupportDesk.Application.Features.Tickets.Triage;
 using SupportDesk.Domain.Aggregates.Agents;
 using SupportDesk.Domain.Aggregates.Categories;
 using SupportDesk.Domain.Aggregates.Customers;
@@ -45,22 +47,42 @@ public sealed class TicketCreationTests : IAsyncLifetime
     };
     private WebApplication app = null!;
     private HttpClient client = null!;
+    private readonly CreationConcurrencyControl concurrency = new();
+    private string? sqlConnectionString;
+    private bool sqlDatabaseCreated;
 
     public async Task InitializeAsync()
     {
-        await connection.OpenAsync();
+        var sqlServer = Environment.GetEnvironmentVariable("SUPPORTDESK_TEST_SQLSERVER");
+        if (string.IsNullOrWhiteSpace(sqlServer))
+            await connection.OpenAsync();
+        else
+        {
+            // Never use the caller's database: every test receives a unique disposable database.
+            sqlConnectionString = new SqlConnectionStringBuilder(sqlServer)
+            {
+                InitialCatalog = $"SupportDeskTriageTest_{Guid.NewGuid():N}"
+            }.ConnectionString;
+        }
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production" });
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "sla-appsettings.json"));
         builder.Services.AddSlaSettings(builder.Configuration).AddApplication();
         builder.Services.AddSingleton<IClock>(new FixedClock());
-        builder.Services.AddDbContext<SupportDbContext>(options => options.UseSqlite(connection));
-        builder.Services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<SupportDbContext>());
-        builder.Services.AddScoped<ITicketRepository, TicketRepository>();
+        builder.Services.AddDbContext<SupportDbContext>(options =>
+        {
+            if (sqlConnectionString is null) options.UseSqlite(connection);
+            else options.UseSqlServer(sqlConnectionString, sql => sql.EnableRetryOnFailure());
+        });
+        builder.Services.AddScoped<IUnitOfWork>(sp => new CreationConcurrencyControl.UnitOfWork(
+            sp.GetRequiredService<SupportDbContext>(), concurrency));
+        builder.Services.AddScoped<ITicketRepository>(sp => new CreationConcurrencyControl.Tickets(
+            new TicketRepository(sp.GetRequiredService<SupportDbContext>()), concurrency));
         builder.Services.AddScoped<ICustomerRepository, CustomerRepository>();
         builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
-        builder.Services.AddScoped<IAgentQueries, AgentQueries>();
+        builder.Services.AddScoped<IAgentQueries>(sp => new CreationConcurrencyControl.Agents(
+            new AgentQueries(sp.GetRequiredService<SupportDbContext>()), concurrency));
         builder.Services.AddScoped<ITicketQueries, TicketQueries>();
         builder.Services.AddControllers(options => options.Filters.Add<ValidationFilter>())
             .AddApplicationPart(typeof(TicketsController).Assembly)
@@ -71,7 +93,12 @@ public sealed class TicketCreationTests : IAsyncLifetime
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<SupportDbContext>();
-            await db.Database.EnsureCreatedAsync();
+            if (sqlConnectionString is null) await db.Database.EnsureCreatedAsync();
+            else
+            {
+                await db.Database.MigrateAsync();
+                sqlDatabaseCreated = true;
+            }
             db.AddRange(standard, premium, general, forced, first, second);
             await db.SaveChangesAsync();
             first.AddSpecialization(forced.Id);
@@ -89,6 +116,14 @@ public sealed class TicketCreationTests : IAsyncLifetime
         if (app is not null)
         {
             await app.StopAsync();
+            if (sqlDatabaseCreated)
+            {
+                var database = new SqlConnectionStringBuilder(sqlConnectionString).InitialCatalog;
+                if (!database.StartsWith("SupportDeskTriageTest_", StringComparison.Ordinal))
+                    throw new InvalidOperationException("Refusing to delete a non-test database.");
+                using var scope = app.Services.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Database.EnsureDeletedAsync();
+            }
             await app.DisposeAsync();
         }
         await connection.DisposeAsync();
@@ -181,6 +216,101 @@ public sealed class TicketCreationTests : IAsyncLifetime
     {
         using var response = await client.PostAsJsonAsync("/api/tickets", new CreateTicketRequest("", "", standard.Id, general.Id, null), json);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(5, 0.25, 1.25)]
+    [InlineData(2, 0.25, 1)]
+    public async Task Post_CustomConfigurationAppliesFractionalWindowAndMinimum(double baseHours, double multiplier, double expectedHours)
+    {
+        var settings = app.Services.GetRequiredService<SlaSettings>();
+        settings.BaseWindowHours[TicketPriority.High] = baseHours;
+        settings.PremiumCustomerMultiplier = multiplier;
+        using var response = await client.PostAsJsonAsync("/api/tickets", Request(TicketPriority.High, premium.Id, general.Id), json);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<TicketDetailDto>(json))!;
+        Assert.Equal(FixedClock.DefaultNow.AddHours(expectedHours), result.DueAtUtc);
+        Assert.Contains($"applied window {expectedHours.ToString(System.Globalization.CultureInfo.InvariantCulture)} hours", result.Triage!.SlaReason);
+        using var scope = app.Services.CreateScope();
+        Assert.Equal(result.DueAtUtc, (await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().SingleAsync()).DueAtUtc);
+    }
+
+    [Fact]
+    public async Task Post_NoMatchingSpecialistReturns201Unassigned()
+    {
+        using (var scope = app.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<SupportDbContext>();
+            db.RemoveRange(await db.Set<AgentSpecialization>().ToListAsync());
+            await db.SaveChangesAsync();
+        }
+        using var response = await client.PostAsJsonAsync("/api/tickets", Request(TicketPriority.Low, premium.Id, forced.Id), json);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<TicketDetailDto>(json))!;
+        Assert.Null(result.AssignedAgent);
+        Assert.Equal(TicketPriority.Critical, result.Priority);
+        Assert.Contains("required specialization", result.Triage!.AssignmentReason);
+        using var readScope = app.Services.CreateScope();
+        Assert.Null((await readScope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().SingleAsync()).AssignedAgentId);
+    }
+
+    [Fact]
+    public async Task Post_AllAgentsAtCapacityReturns201Unassigned()
+    {
+        for (var index = 0; index < 3; index++)
+        {
+            using var seeded = await client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json);
+            Assert.Equal(HttpStatusCode.Created, seeded.StatusCode);
+        }
+        using var response = await client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<TicketDetailDto>(json))!;
+        Assert.Null(result.AssignedAgent);
+        Assert.Contains("capacity", result.Triage!.AssignmentReason);
+        using var scope = app.Services.CreateScope();
+        var tickets = await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().ToListAsync();
+        Assert.Equal(4, tickets.Count);
+        Assert.Null(tickets.Single(ticket => ticket.Id == result.Id).AssignedAgentId);
+    }
+
+    [SqlServerFact]
+    public async Task Post_ConcurrentStaleWorkloadsCanExceedCapacity()
+    {
+        concurrency.Mode = CreationConcurrencyControl.Schedule.CapacityRace;
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json),
+            client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json));
+        try
+        {
+            Assert.All(responses, response => Assert.Equal(HttpStatusCode.Created, response.StatusCode));
+            using var scope = app.Services.CreateScope();
+            var tickets = await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().ToListAsync();
+            Assert.Equal(2, tickets.Count);
+            Assert.Equal(2, tickets.Select(ticket => ticket.Reference).Distinct().Count());
+            Assert.All(tickets, ticket => Assert.Equal(first.Id, ticket.AssignedAgentId));
+            Assert.True(tickets.Count > first.MaxOpenTickets);
+        }
+        finally { foreach (var response in responses) response.Dispose(); }
+    }
+
+    [SqlServerFact]
+    public async Task Post_ConcurrentReferenceReadsCanCauseUniqueKeyConflict()
+    {
+        concurrency.Mode = CreationConcurrencyControl.Schedule.ReferenceRace;
+        var responses = await Task.WhenAll(
+            client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json),
+            client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json));
+        try
+        {
+            Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Created);
+            Assert.Single(responses, response => response.StatusCode == HttpStatusCode.InternalServerError);
+            Assert.Equal(2, concurrency.References.Count);
+            Assert.Single(concurrency.References.Distinct());
+            Assert.Contains(concurrency.SqlErrorNumbers, number => number is 2601 or 2627);
+            using var scope = app.Services.CreateScope();
+            Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().CountAsync());
+        }
+        finally { foreach (var response in responses) response.Dispose(); }
     }
 
     private static CreateTicketRequest Request(TicketPriority? priority, int customerId, int categoryId) =>

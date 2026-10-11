@@ -122,6 +122,46 @@ protect multiple API instances. Reference generation also retains its existing c
 collision risk (both requests can compute the same next reference). No concurrency-safety
 claim is made for this implementation.
 
+### Automatic triage verification
+
+The normal backend suite uses SQLite for repeatable relational query and HTTP creation
+tests. The same `TicketCreationTests` can also run against SQL Server with the existing
+migrations. Set a server connection string (create/drop database permission is required):
+
+```powershell
+$env:SUPPORTDESK_TEST_SQLSERVER = 'Server=localhost\SQLEXPRESS;Integrated Security=True;TrustServerCertificate=True;Encrypt=False'
+dotnet test apps/api/tests/SupportDesk.UnitTests/SupportDesk.UnitTests.csproj -c Release --filter FullyQualifiedName~TicketCreationTests
+Remove-Item Env:SUPPORTDESK_TEST_SQLSERVER
+```
+
+Each case overrides the supplied database name with a unique
+`SupportDeskTriageTest_<guid>` database and deletes only that database during cleanup.
+Existing application data is not seeded, changed or deleted. SQL Server-only tests are
+explicitly skipped when the environment variable is absent; ordinary cases use SQLite.
+
+Coverage is split between existing policy tests (all priority/tier combinations, flags,
+eligibility, fewest-open selection and ID ties), `AgentQueriesTests` (real open-count and
+specialization projection), configuration/domain tests, and HTTP creation tests (201,
+response reasons, persisted values, custom windows/floor, unavailable agents, 400 and 404).
+Command tests also verify that query/save failures propagate instead of returning success.
+
+SQL Server Express verification on 2026-10-11 passed all 17 HTTP creation/concurrency cases.
+This is SQL Server verification, separate from the default SQLite suite. Cleanup was
+confirmed with zero remaining `SupportDeskTriageTest_` databases.
+
+Two test-only scheduling gates reproduce unsafe interleavings through real HTTP requests:
+
+- `Post_ConcurrentStaleWorkloadsCanExceedCapacity` holds two completed workload reads,
+  then lets reference reads/inserts proceed sequentially. Both requests return 201 with
+  distinct references, but assign two open tickets to an agent whose capacity is one.
+- `Post_ConcurrentReferenceReadsCanCauseUniqueKeyConflict` holds both generated references
+  before either insert. One request returns 201; the other encounters SQL Server duplicate
+  key error 2601/2627 and returns 500. Only one ticket is saved.
+
+These are diagnostic tests that assert the current limitations, not proof of safety.
+The decorators only control timing and collect errors; production code is unchanged.
+They must be updated when proper cross-request protection is implemented.
+
 | Symptom | Fix |
 | --- | --- |
 | API cannot reach the database | `npm run db:up`, wait ~20 s, check `docker compose ps` |
