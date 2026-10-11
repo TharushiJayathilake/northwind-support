@@ -103,9 +103,19 @@ public sealed class Ticket : AggregateRoot
     }
 
     /// <summary>
-    /// Hands the ticket to an agent, or takes it back off them when <paramref name="agentId"/>
-    /// is null. Whether the agent may take it is checked by the caller, which can see agents.
+    /// Applies a future UTC deadline calculated by the caller.
     /// </summary>
+    public void SetDueDate(DateTime dueAtUtc, DateTime nowUtc)
+    {
+        if (dueAtUtc.Kind != DateTimeKind.Utc || nowUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Deadline and update timestamps must be UTC.");
+        if (dueAtUtc <= nowUtc)
+            throw new ArgumentOutOfRangeException(nameof(dueAtUtc), "The deadline must be after the update timestamp.");
+        DueAtUtc = dueAtUtc;
+        UpdatedAtUtc = nowUtc;
+    }
+
+    /// <summary>Applies the owner selected or cleared by the caller.</summary>
     public void AssignTo(int? agentId, DateTime nowUtc)
     {
         AssignedAgentId = agentId;

@@ -29,7 +29,14 @@ public sealed class TicketTriagePolicy
         var priority = category.ForcesCriticalPriority
             ? TicketPriority.Critical
             : requestedPriority ?? TicketPriority.Medium;
-        return CalculateDeadline(priority, tier, createdAtUtc);
+        return CalculateDeadline(priority, tier, createdAtUtc) with
+        {
+            PriorityReason = category.ForcesCriticalPriority
+                ? "The category requires Critical priority, overriding any requested priority."
+                : requestedPriority.HasValue
+                    ? $"Using the requested {priority} priority."
+                    : "No priority was requested; defaulted to Medium."
+        };
     }
 
     // Escalation can reuse deadline calculation with its already-decided priority and start time.
@@ -43,8 +50,11 @@ public sealed class TicketTriagePolicy
         var hours = baseWindowHours[priority];
         if (tier == CustomerTier.Premium) hours *= premiumMultiplier;
         var window = TimeSpan.FromHours(Math.Max(minimumHours, hours));
-        return new PrioritySlaDecision(priority, window, startsAtUtc.Add(window));
+        return new PrioritySlaDecision(priority, window, startsAtUtc.Add(window),
+            $"Using {priority} priority.",
+            FormattableString.Invariant($"{tier} customer: configured base {baseWindowHours[priority]} hours, multiplier {(tier == CustomerTier.Premium ? premiumMultiplier : 1)}, minimum {minimumHours} hours; applied window {window.TotalHours} hours from the UTC start time."));
     }
 }
 
-public sealed record PrioritySlaDecision(TicketPriority Priority, TimeSpan Window, DateTime DueAtUtc);
+public sealed record PrioritySlaDecision(TicketPriority Priority, TimeSpan Window, DateTime DueAtUtc,
+    string PriorityReason, string SlaReason);

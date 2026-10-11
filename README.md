@@ -106,6 +106,22 @@ and 40 tickets across every status, priority and SLA state.
 
 ## Troubleshooting
 
+### Automatic triage limitations
+
+Ticket creation applies configured priority/SLA rules and selects an agent from the current
+database workload. The creation response includes `triage` reasons; these explanations are
+not persisted and are not returned on later GET requests.
+
+Capacity is not atomically enforced across concurrent requests. `SaveChangesAsync` commits
+the ticket values together, but the earlier workload read is outside that transaction. Two
+requests can observe one remaining slot and both choose the same agent. The schema has no
+capacity constraint or reservation mechanism. Reliable enforcement requires a database-wide
+transaction/locking strategy spanning workload selection and insert, coordinated with other
+assignment/status writers and SQL Server retry handling. A process-local lock would not
+protect multiple API instances. Reference generation also retains its existing concurrent
+collision risk (both requests can compute the same next reference). No concurrency-safety
+claim is made for this implementation.
+
 | Symptom | Fix |
 | --- | --- |
 | API cannot reach the database | `npm run db:up`, wait ~20 s, check `docker compose ps` |
