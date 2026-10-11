@@ -183,4 +183,30 @@ public sealed class TicketEscalationMappingTests : IAsyncLifetime
         nullable ? null : fromAgent.Id, nullable ? null : toAgent.Id,
         nullable ? null : FixedClock.DefaultNow.AddHours(72), nullable ? null : FixedClock.DefaultNow.AddHours(24),
         new string('r', 500), new string('a', 100), FixedClock.DefaultNow);
+
+    [SqlServerFact]
+    public async Task Migration_SqlServerCatalogContainsAuditForeignKeysAndIndexes()
+    {
+        Assert.Contains("20261011095659_AddTicketEscalations", await db.Database.GetAppliedMigrationsAsync());
+        Assert.Empty(await db.Database.GetPendingMigrationsAsync());
+        var indexes = await db.Database.SqlQueryRaw<string>("""
+            SELECT i.name + ':' + c.name AS [Value]
+            FROM sys.indexes i
+            JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('dbo.TicketEscalations') AND ic.key_ordinal > 0
+            """).ToListAsync();
+        Assert.Equal(new[] { "IX_TicketEscalations_FromAgentId:FromAgentId", "IX_TicketEscalations_TicketId:TicketId",
+            "IX_TicketEscalations_ToAgentId:ToAgentId", "PK_TicketEscalations:Id" }, indexes.OrderBy(value => value).ToArray());
+        var foreignKeys = await db.Database.SqlQueryRaw<string>("""
+            SELECT c.name + ':' + OBJECT_NAME(fk.referenced_object_id) + ':' +
+                fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT AS [Value]
+            FROM sys.foreign_keys fk
+            JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+            JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+            WHERE fk.parent_object_id = OBJECT_ID('dbo.TicketEscalations')
+            """).ToListAsync();
+        Assert.Equal(new[] { "FromAgentId:Agents:NO_ACTION", "TicketId:Tickets:NO_ACTION", "ToAgentId:Agents:NO_ACTION" },
+            foreignKeys.OrderBy(value => value).ToArray());
+    }
 }

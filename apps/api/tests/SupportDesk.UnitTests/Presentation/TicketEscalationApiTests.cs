@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -166,7 +167,10 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         var ticket = await SeedTicketAsync(priority, status: status);
         using var response = await PostAsync(ticket.Id);
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains(message, await response.Content.ReadAsStringAsync());
+        var problem = (await response.Content.ReadFromJsonAsync<ProblemDetails>(json))!;
+        Assert.Equal(409, problem.Status);
+        Assert.Equal("Conflict", problem.Title);
+        Assert.Contains(message, problem.Detail);
         await AssertUnchangedAsync(ticket);
     }
 
@@ -197,6 +201,9 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         };
         using var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate", new EscalateTicketRequest(reason, actor), json);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = (await response.Content.ReadFromJsonAsync<ValidationProblemDetails>(json))!;
+        Assert.Equal(400, problem.Status);
+        Assert.NotEmpty(problem.Errors);
         await AssertUnchangedAsync(ticket);
     }
 
@@ -282,10 +289,13 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
     [Fact]
     public async Task Post_UnknownTicketReturns404()
     {
+        var existing = await SeedTicketAsync();
         using var response = await PostAsync(999);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        using var scope = app.Services.CreateScope();
-        Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<SupportDbContext>().TicketEscalations.CountAsync());
+        var problem = (await response.Content.ReadFromJsonAsync<ProblemDetails>(json))!;
+        Assert.Equal(404, problem.Status);
+        Assert.Contains("Ticket", problem.Detail);
+        await AssertUnchangedAsync(existing);
     }
 
     [Theory]
@@ -351,6 +361,79 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         using var response = await PostAsync(ticket.Id);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(current.Id, (await response.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!.Ticket.AssignedAgent!.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Get_HistoryOrdersByTimestampThenIdAndPreservesAllStoredValues(bool matchingTimestamps)
+    {
+        var ticket = await SeedTicketAsync();
+        using var firstResponse = await PostAsync(ticket.Id);
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        var first = (await firstResponse.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!.Escalation;
+        if (!matchingTimestamps) clock.Advance(TimeSpan.FromHours(1));
+        using var secondResponse = await PostAsync(ticket.Id);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+        var second = (await secondResponse.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!.Escalation;
+
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<SupportDbContext>();
+        // A later ID with an older timestamp proves time is the primary sort, not ID.
+        var oldest = new TicketEscalation(ticket.Id, TicketPriority.Low, TicketPriority.Medium,
+            null, null, null, null, "Older historical event", "Other lead", first.EscalatedAtUtc.AddHours(-1));
+        db.TicketEscalations.Add(oldest);
+        var other = Ticket.Raise("TCK-0002", "Other ticket", "Another support request", standard.Id, general.Id,
+            TicketPriority.Low, clock.UtcNow);
+        db.Add(other);
+        await db.SaveChangesAsync();
+        db.TicketEscalations.Add(new TicketEscalation(other.Id, TicketPriority.Low, TicketPriority.Medium,
+            null, null, null, null, "Different ticket history", "Other lead", clock.UtcNow.AddHours(1)));
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var beforeHistory = JsonSerializer.Serialize(await db.TicketEscalations.AsNoTracking().OrderBy(record => record.Id).ToListAsync(), json);
+        var beforeTickets = JsonSerializer.Serialize(await db.Set<Ticket>().AsNoTracking().OrderBy(record => record.Id).ToListAsync(), json);
+
+        using var response = await client.GetAsync($"/api/tickets/{ticket.Id}/escalations");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var history = (await response.Content.ReadFromJsonAsync<List<TicketEscalationDto>>(json))!;
+        Assert.Equal(new[] { second.Id, first.Id, oldest.Id }, history.Select(record => record.Id));
+        Assert.All(history, record => Assert.Equal(ticket.Id, record.TicketId));
+        Assert.Equal(second, history[0]);
+        Assert.Equal(first, history[1]);
+        Assert.Equal(new TicketEscalationDto(oldest.Id, ticket.Id, TicketPriority.Low, TicketPriority.Medium,
+            null, null, null, null, oldest.Reason, oldest.EscalatedBy, oldest.EscalatedAtUtc), history[2]);
+        Assert.Equal(matchingTimestamps, first.EscalatedAtUtc == second.EscalatedAtUtc);
+
+        var direct = await new TicketQueries(db, clock).GetEscalationsAsync(ticket.Id, CancellationToken.None);
+        Assert.Equal(history, direct!);
+        Assert.Empty(db.ChangeTracker.Entries());
+        Assert.Equal(beforeHistory, JsonSerializer.Serialize(await db.TicketEscalations.AsNoTracking().OrderBy(record => record.Id).ToListAsync(), json));
+        Assert.Equal(beforeTickets, JsonSerializer.Serialize(await db.Set<Ticket>().AsNoTracking().OrderBy(record => record.Id).ToListAsync(), json));
+        var repeated = (await client.GetFromJsonAsync<List<TicketEscalationDto>>($"/api/tickets/{ticket.Id}/escalations", json))!;
+        Assert.Equal(history, repeated);
+    }
+
+    [Fact]
+    public async Task Get_ExistingTicketWithoutHistoryReturns200AndEmptyArray()
+    {
+        var ticket = await SeedTicketAsync();
+        using var response = await client.GetAsync($"/api/tickets/{ticket.Id}/escalations");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("[]", await response.Content.ReadAsStringAsync());
+        await AssertUnchangedAsync(ticket);
+    }
+
+    [Fact]
+    public async Task Get_NonexistentTicketReturns404WithoutModifyingExistingTicket()
+    {
+        var ticket = await SeedTicketAsync();
+        using var response = await client.GetAsync("/api/tickets/999/escalations");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var problem = (await response.Content.ReadFromJsonAsync<ProblemDetails>(json))!;
+        Assert.Equal(404, problem.Status);
+        Assert.Contains("Ticket", problem.Detail);
+        await AssertUnchangedAsync(ticket);
     }
 
     private async Task<Ticket> SeedTicketAsync(TicketPriority priority = TicketPriority.Low, bool isPremium = false,

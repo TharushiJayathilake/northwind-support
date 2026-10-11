@@ -97,6 +97,7 @@ provider-specific behavior.
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
 | `POST /api/tickets/{id}/escalate` | Escalate one priority level; body contains `reason` (5-500 characters) and `escalatedBy` (1-100). Returns 200 with `ticket` and `escalation`; 400 for invalid input, 404 for unknown ticket, 409 for Critical/Resolved/Closed tickets. |
+| `GET /api/tickets/{id}/escalations` | Read-only audit history ordered by escalation timestamp descending, then ID descending. Returns 200 with an array (empty for an existing ticket without history), or 404 for an unknown ticket. |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
@@ -144,7 +145,8 @@ comparison. Otherwise it selects a replacement or leaves the ticket unassigned. 
 changes and a new audit snapshot share one EF `SaveChangesAsync` transaction. Tests inject
 database failures into ticket updates and audit inserts and verify neither is committed.
 `TicketEscalationApiTests` also supports isolated SQL Server runs, using only disposable
-`SupportDeskEscalationApiTest_<guid>` databases. History retrieval is not implemented yet.
+`SupportDeskEscalationApiTest_<guid>` databases. History retrieval uses no-tracking
+database filtering, ordering and DTO projection, without changing stored records.
 
 `escalatedBy` is currently caller-supplied, not authenticated; Task 3 will replace it with
 JWT identity. Atomic saves do not prevent two concurrent requests from reading the same

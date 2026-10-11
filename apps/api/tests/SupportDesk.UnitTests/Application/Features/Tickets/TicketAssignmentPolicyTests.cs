@@ -151,4 +151,14 @@ public sealed class TicketAssignmentPolicyTests
     {
         Assert.Null(policy.SelectAgentForEscalation(general, [Agent(1, active: false)], 1).AssignedAgentId);
     }
+
+    [Theory]
+    [InlineData(0, 9)]
+    [InlineData(1, 2)]
+    public void Escalation_ReplacementUsesWorkloadThenIdRegardlessOfInputOrder(int higherIdWorkload, int expectedId)
+    {
+        AgentDto[] agents = [Agent(1, active: false), Agent(9, open: higherIdWorkload), Agent(2, open: 1)];
+        Assert.Equal(expectedId, policy.SelectAgentForEscalation(general, agents, 1).AssignedAgentId);
+        Assert.Equal(expectedId, policy.SelectAgentForEscalation(general, agents.Reverse().ToArray(), 1).AssignedAgentId);
+    }
 }

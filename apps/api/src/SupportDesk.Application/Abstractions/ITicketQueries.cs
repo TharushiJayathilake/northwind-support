@@ -14,6 +14,9 @@ public interface ITicketQueries
 
     Task<TicketDetailDto?> GetDetailAsync(int id, CancellationToken ct);
 
+    /// <summary>Newest audit records first; null if the ticket does not exist, empty if it has no history.</summary>
+    Task<IReadOnlyList<TicketEscalationDto>?> GetEscalationsAsync(int ticketId, CancellationToken ct);
+
     /// <summary>A customer's tickets, newest first.</summary>
     Task<IReadOnlyList<TicketListItemDto>> GetForCustomerAsync(int customerId, CancellationToken ct);
 }

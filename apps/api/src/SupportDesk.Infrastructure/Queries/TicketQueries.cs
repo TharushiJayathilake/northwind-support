@@ -78,6 +78,22 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
             .FirstOrDefaultAsync(ct);
     }
 
+    public async Task<IReadOnlyList<TicketEscalationDto>?> GetEscalationsAsync(int ticketId, CancellationToken ct)
+    {
+        if (!await db.Set<Ticket>().AsNoTracking().AnyAsync(ticket => ticket.Id == ticketId, ct))
+            return null;
+
+        return await db.TicketEscalations.AsNoTracking()
+            .Where(escalation => escalation.TicketId == ticketId)
+            .OrderByDescending(escalation => escalation.EscalatedAtUtc)
+            .ThenByDescending(escalation => escalation.Id)
+            .Select(escalation => new TicketEscalationDto(escalation.Id, escalation.TicketId,
+                escalation.FromPriority, escalation.ToPriority, escalation.FromAgentId, escalation.ToAgentId,
+                escalation.FromDueAtUtc, escalation.ToDueAtUtc, escalation.Reason, escalation.EscalatedBy,
+                escalation.EscalatedAtUtc))
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<TicketListItemDto>> GetForCustomerAsync(int customerId, CancellationToken ct)
     {
         var now = clock.UtcNow;
