@@ -5,6 +5,14 @@ const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 
+const utcDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC',
+});
+
+export function formatUtcDateTime(isoString: string): string {
+  return `${utcDateTimeFormatter.format(new Date(isoString))} UTC`;
+}
+
 export function formatDateTime(isoString: string | null): string {
   return isoString ? dateTimeFormatter.format(new Date(isoString)) : '-';
 }

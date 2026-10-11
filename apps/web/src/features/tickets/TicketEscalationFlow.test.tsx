@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatDateTime } from '../../lib/format';
@@ -26,7 +26,8 @@ async function submit() {
 
 describe('Ticket escalation API and refresh', () => {
   beforeEach(() => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify(ticketDetail())));
+    fetchMock.mockImplementation(async (input) => new Response(JSON.stringify(
+      String(input).endsWith('/escalations') ? [] : ticketDetail())));
     vi.stubGlobal('fetch', fetchMock);
   });
   afterEach(() => { vi.resetAllMocks(); vi.unstubAllGlobals(); });
@@ -34,6 +35,8 @@ describe('Ticket escalation API and refresh', () => {
   it('POSTs the typed payload then refetches details and updates the existing page without reloading', async () => {
     let escalated = false;
     fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/escalations'))
+        return new Response(JSON.stringify(escalated ? [escalatedTicket().escalation] : []));
       if (String(input).endsWith('/escalate')) {
         escalated = true;
         return new Response(JSON.stringify(escalatedTicket()));
@@ -44,13 +47,15 @@ describe('Ticket escalation API and refresh', () => {
     const originalForm = screen.getByRole('form', { name: 'Escalate ticket' });
     const originalLocation = window.location.href;
     await submit();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    const post = fetchMock.mock.calls[1];
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/escalate'))!;
     expect(post[0]).toBe('/api/tickets/12/escalate');
     expect(post[1]?.method).toBe('POST');
     expect(JSON.parse(String(post[1]?.body))).toEqual({ reason: 'Impact increased', escalatedBy: 'Temporary actor' });
-    expect(fetchMock.mock.calls[2][0]).toBe('/api/tickets/12');
-    expect(screen.getByText('Critical')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12')).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12/escalations')).toHaveLength(2);
+    expect(screen.getByRole('article', { name: 'Escalation #1' })).toHaveTextContent('Impact increased');
+    expect(within(screen.getByRole('complementary')).getByText('Critical')).toBeInTheDocument();
     expect(screen.getByText('New owner')).toBeInTheDocument();
     expect(screen.getByText('Within SLA')).toBeInTheDocument();
     expect(screen.getByText(formatDateTime(escalatedTicket().ticket.dueAtUtc))).toBeInTheDocument();
@@ -62,10 +67,13 @@ describe('Ticket escalation API and refresh', () => {
   it.each([400, 404, 409])('HTTP %i leaves the existing ticket unchanged and does not refetch', async (status) => {
     fetchMock.mockImplementation(async (input) => String(input).endsWith('/escalate')
       ? new Response(JSON.stringify({ detail: `Escalation rejected (${status})` }), { status })
-      : new Response(JSON.stringify(ticketDetail())));
+      : new Response(JSON.stringify(String(input).endsWith('/escalations') ? [] : ticketDetail())));
     await mount();
     await submit();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12/escalations')).toHaveLength(1);
+    expect(screen.queryByRole('article')).not.toBeInTheDocument();
+    expect(screen.getByText('No escalations yet')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(`Escalation rejected (${status})`);
     expect(screen.getByText('High')).toBeInTheDocument();
     expect(screen.getByText('Sara Lindqvist')).toBeInTheDocument();
@@ -75,14 +83,65 @@ describe('Ticket escalation API and refresh', () => {
   });
 
   it('preserves the confirmed response if the follow-up detail request fails', async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(ticketDetail())))
-      .mockResolvedValueOnce(new Response(JSON.stringify(escalatedTicket())))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Refresh unavailable' }), { status: 500 }));
+    let escalated = false;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/escalations'))
+        return new Response(JSON.stringify(escalated ? [escalatedTicket().escalation] : []));
+      if (String(input).endsWith('/escalate')) {
+        escalated = true;
+        return new Response(JSON.stringify(escalatedTicket()));
+      }
+      return escalated ? new Response(JSON.stringify({ detail: 'Refresh unavailable' }), { status: 500 })
+        : new Response(JSON.stringify(ticketDetail()));
+    });
     await mount();
     await submit();
-    expect(screen.getByText('Critical')).toBeInTheDocument();
+    expect(within(screen.getByRole('complementary')).getByText('Critical')).toBeInTheDocument();
     expect(screen.getByText('New owner')).toBeInTheDocument();
     expect(screen.getByText('Ticket escalated successfully.')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Refresh unavailable');
+  });
+
+  it('refreshes ticket details even when history refresh fails', async () => {
+    let escalated = false;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/escalations'))
+        return escalated ? new Response(JSON.stringify({ detail: 'History unavailable' }), { status: 500 })
+          : new Response('[]');
+      if (String(input).endsWith('/escalate')) {
+        escalated = true;
+        return new Response(JSON.stringify(escalatedTicket()));
+      }
+      return new Response(JSON.stringify(escalated ? escalatedTicket().ticket : ticketDetail()));
+    });
+    await mount();
+    await submit();
+    expect(within(screen.getByRole('complementary')).getByText('Critical')).toBeInTheDocument();
+    expect(screen.getByText('Ticket escalated successfully.')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('History unavailable');
+  });
+
+  it('keeps refreshed history when the initial history request completes late', async () => {
+    let historyCalls = 0;
+    let escalated = false;
+    let resolveOld: (response: Response) => void = () => { throw new Error('No initial history request'); };
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/escalations')) {
+        if (++historyCalls === 1) return new Promise((resolve) => { resolveOld = resolve; });
+        return new Response(JSON.stringify([escalatedTicket().escalation]));
+      }
+      if (String(input).endsWith('/escalate')) {
+        escalated = true;
+        return new Response(JSON.stringify(escalatedTicket()));
+      }
+      return new Response(JSON.stringify(escalated ? escalatedTicket().ticket : ticketDetail()));
+    });
+    await mount();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading escalation history');
+    await submit();
+    expect(screen.getByRole('article', { name: 'Escalation #1' })).toBeInTheDocument();
+    await act(async () => { resolveOld(new Response('[]')); });
+    expect(screen.getByRole('article', { name: 'Escalation #1' })).toBeInTheDocument();
+    expect(screen.queryByText('No escalations yet')).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import type {
   TicketFilters,
   TicketListItem,
   TicketStatus,
+  TicketEscalation,
 } from '../types/api';
 import { request } from './client';
 
@@ -44,6 +45,8 @@ export const ticketsApi = {
     request<PagedResult<TicketListItem>>(`/tickets?${buildQuery(filters)}`),
 
   getTicket: (id: number) => request<TicketDetail>(`/tickets/${id}`),
+
+  getEscalations: (id: number) => request<TicketEscalation[]>(`/tickets/${id}/escalations`),
 
   createTicket: (payload: CreateTicketPayload) =>
     request<TicketDetail>('/tickets', {

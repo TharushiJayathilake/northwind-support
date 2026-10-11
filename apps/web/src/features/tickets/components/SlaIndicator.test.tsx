@@ -10,6 +10,9 @@ import { TicketDetailPage } from '../TicketDetailPage';
 import { useTicket } from '../hooks/useTicket';
 
 vi.mock('../hooks/useTicket', () => ({ useTicket: vi.fn() }));
+vi.mock('../hooks/useTicketEscalations', () => ({
+  useTicketEscalations: () => ({ data: [], isLoading: false, reload: async () => {} }),
+}));
 vi.mock('../../../hooks/useReferenceData', () => ({
   useReferenceData: () => ({ data: { agents: [], categories: [], customers: [] } }),
 }));

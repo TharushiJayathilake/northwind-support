@@ -4,9 +4,11 @@ import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { AssignAgentControl } from './components/AssignAgentControl';
 import { EscalationForm } from './components/EscalationForm';
+import { EscalationHistory } from './components/EscalationHistory';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
 import { useTicket } from './hooks/useTicket';
+import { useTicketEscalations } from './hooks/useTicketEscalations';
 
 export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -14,6 +16,7 @@ export function TicketDetailPage() {
 
   const { data: ticket, isLoading, error, reload, setData } = useTicket(ticketId);
   const reference = useReferenceData();
+  const history = useTicketEscalations(ticketId);
 
   if (Number.isNaN(ticketId)) {
     return <ErrorMessage message="That is not a valid ticket reference." />;
@@ -54,9 +57,10 @@ export function TicketDetailPage() {
           <StatusActions ticket={ticket} onUpdated={setData} />
           <EscalationForm ticketId={ticket.id} onEscalated={async (response) => {
             setData(response.ticket);
-            // Step 55 can refresh its history query through this same confirmed-success callback.
-            await reload();
+            await Promise.all([reload(), history.reload()]);
           }} />
+          <EscalationHistory history={history.data} isLoading={history.isLoading} error={history.error}
+            agents={reference.data?.agents ?? []} onRetry={() => void history.reload()} />
         </div>
 
         <aside className="detail-layout__side">
