@@ -12,28 +12,29 @@ interface HistoryState {
 
 export function useTicketEscalations(ticketId: number) {
   const [state, setState] = useState<HistoryState>({ ticketId, isLoading: true });
-  const version = useRef(0);
+  const requests = useRef({ version: 0 });
   const currentId = useRef<number | undefined>(ticketId);
 
   const reload = useCallback(async () => {
     if (currentId.current !== ticketId || !Number.isSafeInteger(ticketId) || ticketId <= 0) return;
-    const requestVersion = ++version.current;
+    const requestVersion = ++requests.current.version;
     setState((current) => ({ ticketId, isLoading: true,
       data: current.ticketId === ticketId ? current.data : undefined }));
     try {
       const data = await ticketsApi.getEscalations(ticketId);
-      if (requestVersion === version.current) setState({ ticketId, isLoading: false, data });
+      if (requestVersion === requests.current.version) setState({ ticketId, isLoading: false, data });
     } catch (error) {
-      if (requestVersion === version.current)
+      if (requestVersion === requests.current.version)
         setState((current) => ({ ...current, isLoading: false,
           error: toErrorMessage(error, 'Unable to load escalation history.') }));
     }
   }, [ticketId]);
 
   useEffect(() => {
+    const requestState = requests.current;
     currentId.current = ticketId;
     void reload();
-    return () => { currentId.current = undefined; version.current++; };
+    return () => { currentId.current = undefined; requestState.version++; };
   }, [ticketId, reload]);
 
   // Hide the previous ticket's history immediately, before the new effect runs.

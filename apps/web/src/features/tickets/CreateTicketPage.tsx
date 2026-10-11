@@ -5,7 +5,8 @@ import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
-import { creationResult, TriageResult } from './components/TriageResult';
+import { TriageResult } from './components/TriageResult';
+import { creationResult } from './creationResult';
 
 export function CreateTicketPage() {
   const reference = useReferenceData();

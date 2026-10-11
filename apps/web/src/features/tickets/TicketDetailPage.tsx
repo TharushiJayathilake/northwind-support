@@ -7,7 +7,8 @@ import { EscalationForm } from './components/EscalationForm';
 import { EscalationHistory } from './components/EscalationHistory';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
-import { readCreationResult, TriageResult } from './components/TriageResult';
+import { TriageResult } from './components/TriageResult';
+import { readCreationResult } from './creationResult';
 import { useTicket } from './hooks/useTicket';
 import { useTicketEscalations } from './hooks/useTicketEscalations';
 

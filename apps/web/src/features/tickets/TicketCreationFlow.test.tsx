@@ -6,7 +6,8 @@ import { ticketDetail } from '../../test/fixtures';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketPage } from './CreateTicketPage';
 import { TicketDetailPage } from './TicketDetailPage';
-import { creationResult, readCreationResult, TriageResult } from './components/TriageResult';
+import { TriageResult } from './components/TriageResult';
+import { creationResult, readCreationResult } from './creationResult';
 
 vi.mock('../../hooks/useReferenceData', () => ({
   useReferenceData: () => ({ data: {
