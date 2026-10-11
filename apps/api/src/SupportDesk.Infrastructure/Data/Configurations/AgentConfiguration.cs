@@ -16,6 +16,7 @@ public sealed class AgentConfiguration : IEntityTypeConfiguration<Agent>
         builder.Property(a => a.FullName).HasMaxLength(200).IsRequired();
 
         builder.Property(a => a.Email).HasMaxLength(256).IsRequired();
+        builder.Property(a => a.PasswordHash).HasMaxLength(512);
 
         builder.Property(a => a.CreatedAtUtc).HasColumnType("datetime2(3)");
 

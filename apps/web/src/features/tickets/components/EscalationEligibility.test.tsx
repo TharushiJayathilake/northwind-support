@@ -33,7 +33,6 @@ describe('Escalation eligibility', () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAccessibleDescription(expect.stringContaining(message));
     expect(screen.getByLabelText('Reason')).toBeDisabled();
-    expect(screen.getByLabelText('Escalated by (temporary)')).toBeDisabled();
     await act(async () => { fireEvent.submit(screen.getByRole('form', { name: 'Escalate ticket' })); });
     expect(ticketsApi.escalateTicket).not.toHaveBeenCalled();
   });

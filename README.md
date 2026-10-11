@@ -46,7 +46,7 @@ Full requirements are in **[`ASSIGNMENT_CANDIDATE.md`](ASSIGNMENT_CANDIDATE.md)*
 **Prerequisites:** .NET SDK 10 (`global.json`), Node.js 22 (`.nvmrc`; 20.19+ works), Docker.
 
 ```bash
-cp .env.example .env          # optional, every value has a working default
+cp .env.example .env          # safe placeholders; configure JWT as described below
 npm install                   # installs the web app
 npm run db:up                 # SQL Server 2022 in Docker on localhost:1433
 npm run api                   # terminal 1: migrates, seeds, then serves the API
@@ -71,7 +71,104 @@ credentials.**
 npm test                      # dotnet test, then the web tests (Vitest)
 ```
 
-Both pass on a clean checkout and neither needs a database.
+Both pass on a clean checkout without an external database (the backend uses disposable SQLite databases).
+
+## Task 3 Authentication
+
+### Configuration and Development Login
+
+Before starting the API or using EF CLI, configure JWT in that terminal. The API
+does not automatically load the root `.env`. PowerShell example:
+
+```powershell
+$env:Jwt__SigningKey = node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('base64'))"
+$env:Jwt__Issuer = 'NorthwindSupport'
+$env:Jwt__Audience = 'NorthwindWeb'
+$env:Jwt__LifetimeMinutes = '60'
+npm run api
+```
+
+In Bash use `export Jwt__SigningKey="$(node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('base64'))")`
+and export the other three variables above. Keep a stable random key securely outside
+source control if sessions must survive API restarts. Missing or invalid settings
+fail startup clearly. JWT keys require at least 32 UTF-8 bytes; issuer and audience
+are mandatory. Lifetime defaults to 60 minutes, configurable from 1 to 1440.
+
+**Development-only credentials, never for production:**
+
+- Email: `alex.turner@northwind-support.example`
+- Password: `Northwind-Dev-Only!2026`
+- The other seeded demo agents use the same fixture password. Inactive Yuki cannot log in.
+
+Development startup seeds missing hashes for only the six known demo addresses.
+It never overwrites existing credentials. Production startup does not seed them.
+
+### Design and API
+
+Credentials use nullable `Agent.PasswordHash`, avoiding duplicate user identities
+or a full Identity schema for this agent-only system. Migration
+`20261011143214_AddAgentCredentials` adds only an optional `nvarchar(512)` column.
+Existing agents, tickets and history are preserved. Only salted, versioned PBKDF2
+hashes produced by ASP.NET Core Identity `PasswordHasher<Agent>` are stored.
+Successful verification can upgrade an older hash. Domain remains independent of
+Identity; the Application authentication interface is implemented in Infrastructure.
+Presentation owns HTTP, JWT issuance and bearer authentication.
+
+`POST /api/auth/login` accepts email/password and returns `accessToken`,
+`expiresAtUtc` and `agent` (`id`, `fullName`, `email`). Incorrect password, unknown
+email and inactive agents receive the same generic 401. No hashes are returned.
+Unknown/uncredentialed identities still perform dummy-hash verification to reduce
+the obvious password-hashing timing difference.
+
+`GET /api/auth/me` returns the current authenticated active agent. HS256 JWTs have
+subject = AgentId, issuer, audience, unique token ID and expiry. Validation checks
+algorithm/signature, issuer, audience and lifetime with zero expiry grace. The
+agent must still exist and be active on each authenticated request.
+
+Fallback authorization protects existing controllers by default. Login and
+Development Swagger are public. `/health` is explicitly anonymous in preparation
+for deployment checks; no Task 4 container work was added. Missing, expired or
+invalid tokens receive 401.
+
+Escalation accepts only a reason. Caller-supplied actor JSON cannot determine
+identity. The audit actor is `agent:<id> <current database name>`, truncated to
+100 characters while retaining the stable ID prefix. Historical audit rows remain
+unchanged; all existing escalation business rules are preserved.
+
+### React Session and Security Trade-offs
+
+React has a typed session/provider, accessible login form and protected routes.
+It returns to the requested page, displays the agent name and supports logout.
+The API client attaches bearer tokens. Restored sessions are checked using `/auth/me`;
+expiry and protected-request 401 clear authentication. Stale responses cannot clear
+a newer session or revive one after logout. Escalation no longer requests an actor.
+
+Tokens use **sessionStorage**, scoped to the browser tab and surviving refresh.
+Passwords are never persisted. This is readable by JavaScript and vulnerable to
+XSS, unlike HttpOnly cookies. Production should use HTTPS, CSP/XSS defenses and
+consider a same-site HttpOnly-cookie/BFF design with CSRF protection.
+
+No registration, recovery, OAuth, refresh tokens, MFA, roles, rate limiting or
+lockout is included. Production needs brute-force protection, secure provisioning
+and signing-key rotation. Logout clears only the local session: a copied JWT
+remains valid until expiry or agent deactivation. Password changes do not revoke
+tokens through a security stamp. Tabs do not share logout. Existing assignment,
+reference and escalation concurrency limitations still apply.
+
+### Authentication Tests
+
+Authentication tests are included in `dotnet test` and the frontend suite.
+HTTP cases run real Kestrel servers against SQLite by default. Repeat with SQL Server:
+
+```powershell
+$env:SUPPORTDESK_TEST_SQLSERVER = 'Server=localhost\SQLEXPRESS;Integrated Security=True;TrustServerCertificate=True;Encrypt=False'
+dotnet test apps/api/tests/SupportDesk.UnitTests/SupportDesk.UnitTests.csproj -c Release --filter 'FullyQualifiedName~TicketCreationTests|FullyQualifiedName~TicketEscalationApiTests'
+```
+
+Fixtures generate test-only JWT keys and migrate/drop only their GUID-suffixed
+databases. Existing HTTP tests now send signed bearer tokens and use the same
+production authorization policy. Frontend tests are jsdom/mocked HTTP. See
+`TASK3_VERIFICATION.md` for actual SQL/HTTP results and outstanding browser checks.
 
 Ticket filtering tests run the real EF Core `TicketQueries` implementation against a fresh
 in-memory SQLite relational database per test. They cover exact filters, search, combined
@@ -96,7 +193,7 @@ provider-specific behavior.
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters combine with AND and are applied in the database before counting and paging. Search matches title, reference or customer name. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
-| `POST /api/tickets/{id}/escalate` | Escalate one priority level; body contains `reason` (5-500 characters) and `escalatedBy` (1-100). Returns 200 with `ticket` and `escalation`; 400 for invalid input, 404 for unknown ticket, 409 for Critical/Resolved/Closed tickets. |
+| `POST /api/tickets/{id}/escalate` | Escalate one priority level; body contains only `reason` (5-500 characters). Actor comes from authenticated identity. Returns 200 with `ticket` and `escalation`; 400 for invalid input, 404 for unknown ticket, 409 for Critical/Resolved/Closed tickets. |
 | `GET /api/tickets/{id}/escalations` | Read-only audit history ordered by escalation timestamp descending, then ID descending. Returns 200 with an array (empty for an existing ticket without history), or 404 for an unknown ticket. |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
@@ -148,8 +245,8 @@ database failures into ticket updates and audit inserts and verify neither is co
 `SupportDeskEscalationApiTest_<guid>` databases. History retrieval uses no-tracking
 database filtering, ordering and DTO projection, without changing stored records.
 
-`escalatedBy` is currently caller-supplied, not authenticated; Task 3 will replace it with
-JWT identity. Atomic saves do not prevent two concurrent requests from reading the same
+New `escalatedBy` values come from authenticated agent identity, not request JSON.
+Historical caller-supplied audit records remain unchanged. Atomic saves do not prevent two concurrent requests from reading the same
 ticket version and producing stale updates/history. There is no optimistic concurrency
 token or locking spanning reads and writes. Cross-request assignment capacity is also
 subject to the previously documented race; concurrency safety is not claimed.

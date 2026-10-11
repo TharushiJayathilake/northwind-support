@@ -12,7 +12,6 @@ interface EscalationFormProps {
 
 export function EscalationForm({ ticket, onEscalated, onConflict }: EscalationFormProps) {
   const [reason, setReason] = useState('');
-  const [actor, setActor] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string>();
   const [success, setSuccess] = useState<string>();
@@ -35,8 +34,6 @@ export function EscalationForm({ ticket, onEscalated, onConflict }: EscalationFo
     const validation: Record<string, string> = {};
     if (reason.trim().length < 5 || reason.length > 500)
       validation.reason = 'Enter a reason of 5-500 characters.';
-    if (actor.trim().length === 0 || actor.length > 100)
-      validation.escalatedBy = 'Enter an actor name of 1-100 characters.';
     setErrors(validation);
     setError(undefined);
     setSuccess(undefined);
@@ -45,7 +42,7 @@ export function EscalationForm({ ticket, onEscalated, onConflict }: EscalationFo
     pending.current = true;
     setIsSaving(true);
     try {
-      const response = await ticketsApi.escalateTicket(ticket.id, { reason: reason.trim(), escalatedBy: actor.trim() });
+      const response = await ticketsApi.escalateTicket(ticket.id, { reason: reason.trim() });
       setSuccess('Ticket escalated successfully.');
       setReason('');
       try {
@@ -79,10 +76,6 @@ export function EscalationForm({ ticket, onEscalated, onConflict }: EscalationFo
       <Field id="escalation-reason" label="Reason" error={errors.reason}>
         {(props) => <textarea {...props} rows={4} value={reason} disabled={disabled}
           onChange={(event) => { setReason(event.target.value); setSuccess(undefined); }} />}
-      </Field>
-      <Field id="escalation-actor" label="Escalated by (temporary)" error={errors.escalatedBy}>
-        {(props) => <input {...props} type="text" value={actor} disabled={disabled}
-          onChange={(event) => { setActor(event.target.value); setSuccess(undefined); }} />}
       </Field>
       {error && <p className="field__error" role="alert">{error}</p>}
       {success && <p role="status">{success}</p>}

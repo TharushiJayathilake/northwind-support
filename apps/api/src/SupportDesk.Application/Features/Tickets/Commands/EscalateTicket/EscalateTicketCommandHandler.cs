@@ -13,7 +13,7 @@ public sealed class EscalateTicketCommandHandler(
     IAgentQueries agents, TicketTriagePolicy triagePolicy, TicketAssignmentPolicy assignmentPolicy,
     IUnitOfWork unitOfWork, IClock clock, GetTicketQueryHandler getTicket)
 {
-    public async Task<EscalateTicketResponse> HandleAsync(int id, EscalateTicketRequest request, CancellationToken ct)
+    public async Task<EscalateTicketResponse> HandleAsync(int id, EscalateTicketCommand request, CancellationToken ct)
     {
         var ticket = await tickets.GetByIdAsync(id, ct) ?? throw new NotFoundException("Ticket", id);
         var nextPriority = ticket.GetEscalatedPriority();
