@@ -5,6 +5,7 @@ using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
 using SupportDesk.Presentation.Middleware;
+using SupportDesk.Presentation.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,7 +32,11 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddSlaSettings(builder.Configuration);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+<<<<<<< Updated upstream
 builder.Services.AddDeskAuthentication(builder.Configuration);
+=======
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("sqlserver");
+>>>>>>> Stashed changes
 
 var app = builder.Build();
 
@@ -51,6 +56,10 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+<<<<<<< Updated upstream
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy" })).AllowAnonymous();
+=======
+app.MapHealthChecks("/health").AllowAnonymous();
+>>>>>>> Stashed changes
 
 app.Run();

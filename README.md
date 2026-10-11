@@ -330,3 +330,62 @@ They must be updated when proper cross-request protection is implemented.
 | Browser warns about the certificate | `dotnet dev-certs https --trust`, or use the web app, which proxies |
 | Web app shows "Unable to load tickets" | The API is not running, or `VITE_API_PROXY_TARGET` points at the wrong port |
 | SQL Server slow on Apple Silicon | Enable Rosetta in Docker Desktop → Settings → General |
+# Task 4: Docker API
+
+Run from the repository root with Docker Desktop using Linux containers.
+Copy `.env.example` to `.env` and replace `MSSQL_SA_PASSWORD` with a strong unique
+SQL Server password and `Jwt__SigningKey` with a random key of at least 32 bytes.
+Generate a key locally with `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64'))"`.
+Do not commit `.env`. Compose supplies the database connection using `sqlserver`,
+not localhost. Set `SQLSERVER_PORT` to another free port if 1433 is occupied.
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env with your own secrets before continuing.
+docker compose config --quiet
+docker compose build api
+docker compose up -d
+docker compose ps
+Invoke-WebRequest http://localhost:5080/health
+docker compose exec api whoami
+$env:VITE_API_PROXY_TARGET = 'http://localhost:5080'
+npm run web
+```
+
+The API uses a multi-stage .NET 10 build and runs as the runtime image's non-root
+`app` user on port 8080, published only on loopback port 5080. SQL Server uses a
+persistent named volume. Never use `docker compose down -v` against existing data.
+Development startup applies pending migrations and seeds demo data on an empty
+database using the existing startup mechanism; existing tickets are not reset.
+Production migrations should run as a controlled deployment step instead.
+Production also requires supplying the validated SLA configuration, currently in
+`appsettings.Development.json`, through deployment configuration.
+`/health` is anonymous and queries database connectivity; an unavailable database
+returns HTTP 503. The React app is not included in the Docker image.
+
+**Branch limitation:** the current `feature/task-4-docker` baseline contains Task 2,
+but not Task 3 authentication source, credential migration or credential seeding.
+JWT variables are forwarded for compatibility, but do not enable authentication
+by themselves. Login and protected-ticket verification require the Task 3 code
+to be integrated by the repository owner. Do not describe this baseline as secure.
+Once that source is present, verify login using the development credentials from
+Task 3, then verify tickets return 401 without a token and seeded results with one.
+No authentication functionality is recreated as part of Task 4.
+
+Docker verification results and any remaining limitations are reported separately;
+image-size and restore-cache improvements must not be claimed without measurements.
+
+**Verification on 2026-10-11:** Compose configuration validation passed. The initial
+API image built and published successfully. Afterward, the Dockerfile was hardened
+to remove local development connection settings from the published runtime files;
+that final rebuild could not run because Docker Desktop's engine had stopped.
+SQL Server image extraction failed with a containerd connection-reset/SIGBUS error.
+The Windows C: drive reported zero free bytes, and Docker subsequently reported
+that it was unable to start. No volumes or existing databases were deleted.
+Free disk space and restart Docker Desktop before rerunning the commands above.
+Container health, seed data, non-root execution, final image size and cache reuse
+remain unverified. Authentication additionally requires integrating Task 3.
+Release build passed with zero warnings/errors. Backend tests: 307 passed,
+0 failed, 3 SQL-only tests skipped; architecture tests: 4 passed, 0 failed,
+0 skipped. The two new database-health tests use SQLite, not proof of SQL Server
+container behavior. `git diff --check` passed.
