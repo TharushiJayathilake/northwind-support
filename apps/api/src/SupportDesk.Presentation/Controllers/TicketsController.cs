@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
@@ -50,8 +51,11 @@ public sealed class TicketsController : ControllerBase
     /// <summary>Escalates one priority level and records the decision atomically.</summary>
     [HttpPost("{id:int}/escalate")]
     public Task<EscalateTicketResponse> Escalate(int id, EscalateTicketRequest request,
-        [FromServices] EscalateTicketCommandHandler handler, CancellationToken ct) =>
-        handler.HandleAsync(id, request, ct);
+        [FromServices] EscalateTicketCommandHandler handler, CancellationToken ct)
+    {
+        var actor = $"agent:{User.FindFirstValue("sub")} {User.Identity?.Name}";
+        return handler.HandleAsync(id, new EscalateTicketCommand(request.Reason, actor[..Math.Min(actor.Length, 100)]), ct);
+    }
 
     /// <summary>Moves a ticket to another status.</summary>
     [HttpPatch("{id:int}/status")]

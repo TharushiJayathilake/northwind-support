@@ -5,6 +5,18 @@
 
 export type CustomerTier = 'Standard' | 'Premium';
 
+export interface AuthAgent {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginResponse {
+  accessToken: string;
+  expiresAtUtc: string;
+  agent: AuthAgent;
+}
+
 export type TicketPriority = 'Low' | 'Medium' | 'High' | 'Critical';
 
 export type TicketStatus = 'New' | 'Open' | 'InProgress' | 'Resolved' | 'Closed';
@@ -115,7 +127,6 @@ export interface CreateTicketPayload {
 
 export interface EscalateTicketPayload {
   reason: string;
-  escalatedBy: string;
 }
 
 export interface TicketEscalation {

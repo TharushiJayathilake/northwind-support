@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Domain.Aggregates.Agents;
@@ -25,6 +26,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         if (await db.Set<Ticket>().AnyAsync(ct))
         {
             logger.LogInformation("Seed data already present; skipping.");
+            await SeedDevelopmentCredentialsAsync(ct);
             return;
         }
 
@@ -48,6 +50,19 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         logger.LogInformation(
             "Seeded {Categories} categories, {Customers} customers, {Agents} agents and {Tickets} tickets.",
             categories.Count, customers.Count, agents.Count, await db.Set<Ticket>().CountAsync(ct));
+        await SeedDevelopmentCredentialsAsync(ct);
+    }
+
+    public async Task SeedDevelopmentCredentialsAsync(CancellationToken ct = default)
+    {
+        // Only known demo identities, only missing credentials, called in Development.
+        string[] emails = ["alex.turner@northwind-support.example", "ben.osei@northwind-support.example",
+            "priya.nair@northwind-support.example", "sara.lindqvist@northwind-support.example",
+            "marcus.doyle@northwind-support.example", "yuki.tanaka@northwind-support.example"];
+        var agents = await db.Set<Agent>().Where(a => a.PasswordHash == null && emails.Contains(a.Email)).ToListAsync(ct);
+        var hasher = new PasswordHasher<Agent>();
+        foreach (var agent in agents) agent.SetPasswordHash(hasher.HashPassword(agent, "Northwind-Dev-Only!2026"));
+        await db.SaveChangesAsync(ct);
     }
 
     private static List<Category> SeedCategories() =>

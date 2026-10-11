@@ -1,4 +1,7 @@
 using System.Net;
+using Microsoft.AspNetCore.Identity;
+using System.Net.Http.Headers;
+using SupportDesk.Presentation.Authentication;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -66,6 +69,7 @@ public sealed class TicketCreationTests : IAsyncLifetime
         }
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production" });
         builder.Logging.ClearProviders();
+        TestAuthentication.Configure(builder);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "sla-appsettings.json"));
         builder.Services.AddSlaSettings(builder.Configuration).AddApplication();
@@ -84,11 +88,15 @@ public sealed class TicketCreationTests : IAsyncLifetime
         builder.Services.AddScoped<IAgentQueries>(sp => new CreationConcurrencyControl.Agents(
             new AgentQueries(sp.GetRequiredService<SupportDbContext>()), concurrency));
         builder.Services.AddScoped<ITicketQueries, TicketQueries>();
+        builder.Services.AddScoped<ICustomerQueries, CustomerQueries>();
+        builder.Services.AddScoped<ICategoryQueries, CategoryQueries>();
         builder.Services.AddControllers(options => options.Filters.Add<ValidationFilter>())
             .AddApplicationPart(typeof(TicketsController).Assembly)
             .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         app = builder.Build();
         app.UseMiddleware<ExceptionHandlingMiddleware>();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.MapControllers();
         using (var scope = app.Services.CreateScope())
         {
@@ -100,6 +108,7 @@ public sealed class TicketCreationTests : IAsyncLifetime
                 sqlDatabaseCreated = true;
             }
             db.AddRange(standard, premium, general, forced, first, second);
+            first.SetPasswordHash(new PasswordHasher<Agent>().HashPassword(first, "Test-login-password!"));
             await db.SaveChangesAsync();
             first.AddSpecialization(forced.Id);
             second.AddSpecialization(forced.Id);
@@ -108,6 +117,7 @@ public sealed class TicketCreationTests : IAsyncLifetime
         await app.StartAsync();
         var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         client = new HttpClient { BaseAddress = new Uri(address) };
+        TestAuthentication.SignIn(client, app.Services, first.Id, first.FullName);
     }
 
     public async Task DisposeAsync()
@@ -168,7 +178,7 @@ public sealed class TicketCreationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Post_NoEligibleAgentsStillReturns201AndPersistsUnassignedTicket()
+    public async Task Post_DeactivatedAuthenticatedAgentReturns401WithoutCreatingTicket()
     {
         using (var scope = app.Services.CreateScope())
         {
@@ -177,15 +187,9 @@ public sealed class TicketCreationTests : IAsyncLifetime
             await db.SaveChangesAsync();
         }
         using var response = await client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json);
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var result = (await response.Content.ReadFromJsonAsync<TicketDetailDto>(json))!;
-        Assert.Null(result.AssignedAgent);
-        Assert.Equal("All agents are inactive.", result.Triage!.AssignmentReason);
-        Assert.Equal(FixedClock.DefaultNow.AddHours(24), result.DueAtUtc);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         using var readScope = app.Services.CreateScope();
-        var saved = await readScope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().AsNoTracking().SingleAsync();
-        Assert.Null(saved.AssignedAgentId);
-        Assert.Equal(result.DueAtUtc, saved.DueAtUtc);
+        Assert.Equal(0, await readScope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().CountAsync());
     }
 
     [Fact]
@@ -311,6 +315,98 @@ public sealed class TicketCreationTests : IAsyncLifetime
             Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<SupportDbContext>().Set<Ticket>().CountAsync());
         }
         finally { foreach (var response in responses) response.Dispose(); }
+    }
+
+    [Fact]
+    public async Task Auth_LoginIsPublicReturnsJwtAndMeWithoutHash()
+    {
+        client.DefaultRequestHeaders.Authorization = null;
+        using var response = await client.PostAsJsonAsync("/api/auth/login", new { email = first.Email, password = "Test-login-password!" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("passwordHash", await response.Content.ReadAsStringAsync());
+        var login = (await response.Content.ReadFromJsonAsync<LoginResponse>(json))!;
+        Assert.Equal(first.Id, login.Agent.Id);
+        Assert.True(login.ExpiresAtUtc > DateTime.UtcNow);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        using var me = await client.GetAsync("/api/auth/me");
+        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
+        Assert.Equal(first.Id, (await me.Content.ReadFromJsonAsync<AuthAgent>(json))!.Id);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/tickets")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Auth_UnknownWrongPasswordAndInactiveReturnIdentical401()
+    {
+        client.DefaultRequestHeaders.Authorization = null;
+        using var wrong = await client.PostAsJsonAsync("/api/auth/login", new { email = first.Email, password = "wrong" });
+        using var unknown = await client.PostAsJsonAsync("/api/auth/login", new { email = "unknown@example.test", password = "wrong" });
+        Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, unknown.StatusCode);
+        Assert.Equal(await wrong.Content.ReadAsStringAsync(), await unknown.Content.ReadAsStringAsync());
+        using (var scope = app.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<SupportDbContext>();
+            (await db.Set<Agent>().SingleAsync(a => a.Id == first.Id)).Deactivate();
+            await db.SaveChangesAsync();
+        }
+        using var inactive = await client.PostAsJsonAsync("/api/auth/login", new { email = first.Email, password = "Test-login-password!" });
+        Assert.Equal(HttpStatusCode.Unauthorized, inactive.StatusCode);
+        Assert.Equal(await wrong.Content.ReadAsStringAsync(), await inactive.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData("/api/tickets")]
+    [InlineData("/api/customers")]
+    [InlineData("/api/agents")]
+    [InlineData("/api/categories")]
+    [InlineData("/api/auth/me")]
+    public async Task Auth_EndpointsRequireToken(string path)
+    {
+        client.DefaultRequestHeaders.Authorization = null;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path)).StatusCode);
+        TestAuthentication.SignIn(client, app.Services, first.Id, first.FullName);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(path)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("invalid")]
+    [InlineData("expired")]
+    [InlineData("wrongAudience")]
+    [InlineData("wrongKey")]
+    public async Task Auth_RejectsInvalidExpiredAndWrongScopeTokens(string kind)
+    {
+        var settings = app.Services.GetRequiredService<JwtSettings>();
+        var testSettings = new JwtSettings { Issuer = settings.Issuer,
+            Audience = kind == "wrongAudience" ? "Wrong" : settings.Audience,
+            SigningKey = kind == "wrongKey" ? new string('x', 64) : settings.SigningKey };
+        var clock = new FixedClock(kind == "expired" ? DateTime.UtcNow.AddHours(-2) : DateTime.UtcNow);
+        var token = new JwtTokens(testSettings, clock).Create(new AuthAgent(first.Id, first.FullName, first.Email));
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", kind == "invalid" ? "invalid.token" : token.AccessToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/me")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Auth_CompleteLoginCreateTriageEscalateHistoryAndClientLogoutWorkflow()
+    {
+        client.DefaultRequestHeaders.Authorization = null;
+        using var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email = first.Email, password = "Test-login-password!" });
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+        var login = (await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(json))!;
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        using var creation = await client.PostAsJsonAsync("/api/tickets", Request(null, standard.Id, general.Id), json);
+        Assert.Equal(HttpStatusCode.Created, creation.StatusCode);
+        var ticket = (await creation.Content.ReadFromJsonAsync<TicketDetailDto>(json))!;
+        Assert.NotNull(ticket.Triage);
+        using var escalation = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate", new EscalateTicketRequest("Impact increased"), json);
+        Assert.Equal(HttpStatusCode.OK, escalation.StatusCode);
+        var result = (await escalation.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!;
+        Assert.Equal(TicketPriority.High, result.Ticket.Priority);
+        Assert.Equal($"agent:{first.Id} {first.FullName}", result.Escalation.EscalatedBy);
+        var history = (await client.GetFromJsonAsync<List<TicketEscalationDto>>($"/api/tickets/{ticket.Id}/escalations", json))!;
+        Assert.Single(history);
+        Assert.Equal(result.Escalation, history[0]);
+        client.DefaultRequestHeaders.Authorization = null;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/tickets")).StatusCode);
     }
 
     private static CreateTicketRequest Request(TicketPriority? priority, int customerId, int categoryId) =>

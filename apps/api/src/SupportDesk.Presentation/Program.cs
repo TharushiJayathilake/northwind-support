@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using SupportDesk.Application;
+using SupportDesk.Presentation.Authentication;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
@@ -30,6 +31,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddSlaSettings(builder.Configuration);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddDeskAuthentication(builder.Configuration);
 
 var app = builder.Build();
 
@@ -45,7 +47,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors(FrontendCorsPolicy);
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy" })).AllowAnonymous();
 
 app.Run();

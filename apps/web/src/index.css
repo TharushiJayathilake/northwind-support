@@ -47,6 +47,7 @@ a {
 
 .app__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 32px;
   padding: 12px 24px;
@@ -62,7 +63,20 @@ a {
 
 .app__nav {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
   gap: 16px;
+}
+
+.app__nav span {
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  .app__header { gap: 12px; }
+  .app__nav { flex-basis: 100%; }
 }
 
 .app__nav a {
@@ -463,4 +477,9 @@ textarea[aria-invalid='true'] {
 .triage-result {
   margin-block: 1rem;
   overflow-wrap: anywhere;
+}
+
+.login-page {
+  max-width: 28rem;
+  margin-inline: auto;
 }

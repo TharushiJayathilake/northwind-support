@@ -20,7 +20,6 @@ async function mount() {
 
 async function submit() {
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: '  Impact increased  ' } });
-  fireEvent.change(screen.getByLabelText('Escalated by (temporary)'), { target: { value: '  Temporary actor  ' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Escalate ticket' })); });
 }
 
@@ -52,7 +51,7 @@ describe('Ticket escalation API and refresh', () => {
     if (!post) throw new Error('Expected escalation POST');
     expect(post[0]).toBe('/api/tickets/12/escalate');
     expect(post[1]?.method).toBe('POST');
-    expect(JSON.parse(String(post[1]?.body))).toEqual({ reason: 'Impact increased', escalatedBy: 'Temporary actor' });
+    expect(JSON.parse(String(post[1]?.body))).toEqual({ reason: 'Impact increased' });
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12')).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12/escalations')).toHaveLength(2);
     expect(screen.getByRole('article', { name: 'Escalation #1' })).toHaveTextContent('Impact increased');

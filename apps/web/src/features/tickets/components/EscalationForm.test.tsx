@@ -11,9 +11,8 @@ const escalate = vi.mocked(ticketsApi.escalateTicket);
 const onEscalated = vi.fn();
 const onConflict = vi.fn();
 
-async function submit(reason = 'Impact increased', actor = 'Temporary actor') {
+async function submit(reason = 'Impact increased') {
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: reason } });
-  fireEvent.change(screen.getByLabelText('Escalated by (temporary)'), { target: { value: actor } });
   await act(async () => { fireEvent.submit(screen.getByRole('form', { name: 'Escalate ticket' })); });
 }
 
@@ -24,9 +23,9 @@ describe('EscalationForm', () => {
   });
   afterEach(() => { vi.resetAllMocks(); });
 
-  it('renders a reason textarea and a blank temporary actor input', () => {
+  it('renders a reason textarea without a temporary actor input', () => {
     expect(screen.getByLabelText('Reason').tagName).toBe('TEXTAREA');
-    expect(screen.getByLabelText('Escalated by (temporary)')).toHaveValue('');
+    expect(screen.queryByLabelText('Escalated by (temporary)')).not.toBeInTheDocument();
   });
 
   it.each(['', 'four', '   four   ', 'r'.repeat(501)])('blocks invalid reason length %s', async (reason) => {
@@ -38,20 +37,14 @@ describe('EscalationForm', () => {
 
   it.each([5, 500])('accepts a reason of exactly %i characters', async (length) => {
     await submit('r'.repeat(length));
-    expect(escalate).toHaveBeenCalledWith(12, { reason: 'r'.repeat(length), escalatedBy: 'Temporary actor' });
+    expect(escalate).toHaveBeenCalledWith(12, { reason: 'r'.repeat(length) });
     expect(onEscalated).toHaveBeenCalledWith(escalatedTicket());
     expect(screen.getByRole('status')).toHaveTextContent('Ticket escalated successfully.');
   });
 
-  it.each(['', '   ', 'a'.repeat(101)])('blocks invalid temporary actor %s', async (actor) => {
-    await submit('Valid reason', actor);
-    expect(screen.getByText('Enter an actor name of 1-100 characters.')).toBeInTheDocument();
-    expect(escalate).not.toHaveBeenCalled();
-  });
-
-  it('trims a valid reason and accepts the maximum actor length', async () => {
-    await submit('  Valid reason  ', 'a'.repeat(100));
-    expect(escalate).toHaveBeenCalledWith(12, { reason: 'Valid reason', escalatedBy: 'a'.repeat(100) });
+  it('trims a valid reason and sends no caller-supplied actor', async () => {
+    await submit('  Valid reason  ');
+    expect(escalate).toHaveBeenCalledWith(12, { reason: 'Valid reason' });
   });
 
   it('blocks repeat submissions and shows no success while pending', async () => {
@@ -69,11 +62,10 @@ describe('EscalationForm', () => {
 
   it('shows HTTP 400 field validation feedback', async () => {
     escalate.mockRejectedValueOnce(new ApiError(400, 'Validation failed', { errors: {
-      Reason: ['Reason was rejected'], EscalatedBy: ['Actor was rejected'],
+      Reason: ['Reason was rejected'],
     } }));
     await submit();
     expect(screen.getByText('Reason was rejected')).toBeInTheDocument();
-    expect(screen.getByText('Actor was rejected')).toBeInTheDocument();
     expect(screen.getByText('Validation failed')).toBeInTheDocument();
     expect(screen.getByLabelText('Reason')).toHaveAttribute('aria-invalid', 'true');
     expect(onEscalated).not.toHaveBeenCalled();

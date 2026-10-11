@@ -58,6 +58,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         }.ConnectionString;
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production" });
         builder.Logging.ClearProviders();
+        TestAuthentication.Configure(builder);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Configuration.AddJsonFile(Path.Combine(AppContext.BaseDirectory, "sla-appsettings.json"));
         builder.Services.AddSlaSettings(builder.Configuration).AddApplication();
@@ -78,6 +79,8 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
             .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         app = builder.Build();
         app.UseMiddleware<ExceptionHandlingMiddleware>();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.MapControllers();
         using (var scope = app.Services.CreateScope())
         {
@@ -95,6 +98,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         {
             BaseAddress = new Uri(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single())
         };
+        TestAuthentication.SignIn(client, app.Services, replacement.Id, replacement.FullName);
     }
 
     public async Task DisposeAsync()
@@ -144,7 +148,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         Assert.Equal(result.Ticket.DueAtUtc, result.Escalation.ToDueAtUtc);
         Assert.Equal(clock.UtcNow, result.Escalation.EscalatedAtUtc);
         Assert.Equal("Impact increased", result.Escalation.Reason);
-        Assert.Equal("Team lead", result.Escalation.EscalatedBy);
+        Assert.Equal($"agent:{replacement.Id} {replacement.FullName}", result.Escalation.EscalatedBy);
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<SupportDbContext>();
         var saved = await db.Set<Ticket>().AsNoTracking().SingleAsync();
@@ -181,10 +185,6 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
     [InlineData("shortReason")]
     [InlineData("paddedShortReason")]
     [InlineData("longReason")]
-    [InlineData("nullActor")]
-    [InlineData("emptyActor")]
-    [InlineData("blankActor")]
-    [InlineData("longActor")]
     public async Task Post_InvalidInputReturns400WithoutChanges(string invalid)
     {
         var ticket = await SeedTicketAsync();
@@ -194,12 +194,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
             "shortReason" => "four", "paddedShortReason" => "  abc  ", "longReason" => new string('r', 501),
             _ => "Valid reason"
         };
-        var actor = invalid switch
-        {
-            "nullActor" => null!, "emptyActor" => "", "blankActor" => "   ", "longActor" => new string('a', 101),
-            _ => "Team lead"
-        };
-        using var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate", new EscalateTicketRequest(reason, actor), json);
+        using var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate", new EscalateTicketRequest(reason), json);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = (await response.Content.ReadFromJsonAsync<ValidationProblemDetails>(json))!;
         Assert.Equal(400, problem.Status);
@@ -208,17 +203,17 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(5, 1)]
-    [InlineData(500, 100)]
-    public async Task Post_ValidLengthBoundariesArePersisted(int reasonLength, int actorLength)
+    [InlineData(5)]
+    [InlineData(500)]
+    public async Task Post_ValidLengthBoundariesArePersisted(int reasonLength)
     {
         var ticket = await SeedTicketAsync();
         using var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate",
-            new EscalateTicketRequest(new string('r', reasonLength), new string('a', actorLength)), json);
+            new EscalateTicketRequest(new string('r', reasonLength)), json);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var result = (await response.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!;
         Assert.Equal(reasonLength, result.Escalation.Reason.Length);
-        Assert.Equal(actorLength, result.Escalation.EscalatedBy.Length);
+        Assert.Equal($"agent:{replacement.Id} {replacement.FullName}", result.Escalation.EscalatedBy);
     }
 
     [Theory]
@@ -463,6 +458,20 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Post_IgnoresSpoofedActorAndRecordsAuthenticatedAgent()
+    {
+        var ticket = await SeedTicketAsync();
+        using var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.Id}/escalate",
+            new { reason = "Impact increased", escalatedBy = "Spoofed identity" }, json);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<EscalateTicketResponse>(json))!;
+        Assert.Equal($"agent:{replacement.Id} {replacement.FullName}", result.Escalation.EscalatedBy);
+        using var scope = app.Services.CreateScope();
+        Assert.Equal(result.Escalation.EscalatedBy,
+            (await scope.ServiceProvider.GetRequiredService<SupportDbContext>().TicketEscalations.SingleAsync()).EscalatedBy);
+    }
+
     private async Task<Ticket> SeedTicketAsync(TicketPriority priority = TicketPriority.Low, bool isPremium = false,
         TicketStatus status = TicketStatus.New, bool needsSpecialist = false, bool assigned = true, bool hasDeadline = true)
     {
@@ -480,7 +489,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
     }
 
     private Task<HttpResponseMessage> PostAsync(int id) => client.PostAsJsonAsync($"/api/tickets/{id}/escalate",
-        new EscalateTicketRequest("  Impact increased  ", "  Team lead  "), json);
+        new EscalateTicketRequest("  Impact increased  "), json);
 
     private async Task AssertUnchangedAsync(Ticket original)
     {
