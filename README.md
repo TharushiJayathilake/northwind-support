@@ -122,6 +122,22 @@ protect multiple API instances. Reference generation also retains its existing c
 collision risk (both requests can compute the same next reference). No concurrency-safety
 claim is made for this implementation.
 
+### Escalation audit storage
+
+`TicketEscalations` stores immutable before/after snapshots, with a required ticket reference
+and optional previous/next agent references. All three foreign keys restrict deletion, so
+deleting a ticket or referenced agent cannot erase its audit history. The ticket index supports
+history lookup; agent indexes support foreign-key checks. Dates use UTC and `datetime2(3)`.
+Migration `20261011095659_AddTicketEscalations` adds only this table, its checks and indexes.
+
+The entity has no public setters or mutation methods. `SupportDbContext` rejects tracked
+updates/deletes through both synchronous and asynchronous saves. This is application-level
+append-only protection, not a database trigger: raw SQL or bulk operations can bypass it and
+must not be used to rewrite history. No escalation endpoint or ticket priority change is
+implemented yet. SQL Server mapping tests can be run with `SUPPORTDESK_TEST_SQLSERVER` and
+filter `FullyQualifiedName~TicketEscalationMappingTests`; each case migrates and deletes only
+its own `SupportDeskEscalationTest_<guid>` database.
+
 ### Automatic triage verification
 
 The normal backend suite uses SQLite for repeatable relational query and HTTP creation
