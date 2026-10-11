@@ -154,6 +154,38 @@ ticket version and producing stale updates/history. There is no optimistic concu
 token or locking spanning reads and writes. Cross-request assignment capacity is also
 subject to the previously documented race; concurrency safety is not claimed.
 
+### Dynamic SLA status
+
+SLA status is calculated on each ticket read, never persisted. Each query captures
+`IClock.UtcNow` once. The current window starts at the latest escalation timestamp
+(ordered by timestamp then ID), or ticket creation when no escalation exists, and
+ends at the stored deadline. This preserves the applied Premium multiplier and minimum
+even if configuration changes later. Assignment/status update timestamps do not restart it.
+`AtRiskThresholdPercent` remains configurable: remaining ticks at or below that percentage
+of the current window are AtRisk, including the exact deadline; only time after the
+deadline is Breached. A recorded resolution on/before the deadline is Met, otherwise Breached.
+Closed tickets use their preserved resolution time. Legacy terminal tickets with no
+resolution time, tickets with no deadline, and invalid non-positive open windows cannot
+be assessed and return NotApplicable. No completion timestamp is guessed.
+The evaluator receives explicit UTC timestamps and a validated threshold, keeping Domain
+independent of clock/configuration services. Query projection retrieves the latest start
+in SQL and evaluates status at the final projection. The optional `slaStatus` query parameter
+accepts `NotApplicable`, `WithinSla`, `AtRisk`, `Breached`, or `Met`. It combines with other
+filters using AND and filters in SQL before counting, sorting and paging. Classification
+rules are shared with the evaluator through an expression tree; no client-side filtering
+or persisted status is used. SQL Server durations use day boundaries and time parts,
+avoiding small integer DATEDIFF overflows and retaining sub-millisecond clock precision.
+SQLite coverage uses millisecond-precision stored dates, matching this application's
+SQL Server `datetime2(3)` columns; it is not proof of SQL Server translation.
+There is no separate SLA-start column or migration. Existing atomic escalation history
+provides the restart time; legacy due dates without history are assumed to start at creation.
+Concurrent escalation limitations described above remain unchanged.
+
+`TicketSlaFilteringTests` defaults to SQLite. Set `SUPPORTDESK_TEST_SQLSERVER` to a SQL
+Server connection string and run it with the same test filter to verify SQL Server behavior.
+Each case creates, migrates and drops only its own `SupportDeskSlaFilterTest_<guid>` database.
+Tests inspect executed count/page SQL and compare filtered membership with the evaluator.
+
 ### Automatic triage verification
 
 The normal backend suite uses SQLite for repeatable relational query and HTTP creation

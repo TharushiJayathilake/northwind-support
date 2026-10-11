@@ -24,6 +24,8 @@ public sealed record TicketQuery
 
     public TicketPriority? Priority { get; init; }
 
+    public SlaStatus? SlaStatus { get; init; }
+
     public int? CategoryId { get; init; }
 
     public int? CustomerId { get; init; }

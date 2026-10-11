@@ -1,5 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Moq;
+using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Domain.Aggregates.Agents;
@@ -50,7 +52,7 @@ public sealed class TicketQueriesTests : IAsyncLifetime
             CreateTicket(8, "General question", _beta, _billing, TicketPriority.Low, TicketStatus.Closed));
         await _db.SaveChangesAsync();
         _db.ChangeTracker.Clear();
-        _queries = new TicketQueries(_db, _clock);
+        _queries = new TicketQueries(_db, _clock, SlaTestSettings.Create());
     }
 
     public async Task DisposeAsync()
@@ -283,6 +285,101 @@ public sealed class TicketQueriesTests : IAsyncLifetime
 
     private Task<PagedResult<TicketListItemDto>> SearchAsync(TicketQuery query) =>
         _queries.GetPagedAsync(query.Normalized(), CancellationToken.None);
+
+    [Theory]
+    [InlineData(CustomerTier.Standard, 4)]
+    [InlineData(CustomerTier.Premium, 2)]
+    public async Task SlaStatus_AllReadPathsUseStoredWindowAndMovingClock(CustomerTier tier, double hours)
+    {
+        var customer = tier == CustomerTier.Premium ? _beta : _acme;
+        var settings = SlaTestSettings.Create();
+        var start = _clock.UtcNow;
+        var due = new SupportDesk.Application.Features.Tickets.Triage.TicketTriagePolicy(settings)
+            .CalculateDeadline(TicketPriority.Critical, tier, start).DueAtUtc;
+        var ticket = CreateTicket(99, "SLA test", customer, _technical, TicketPriority.Critical, TicketStatus.New);
+        ticket.SetDueDate(due, start);
+        _db.Add(ticket);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        await AssertSlaReadPaths(ticket.Id, customer.Id, SlaStatus.WithinSla);
+        _clock.Advance(TimeSpan.FromHours(hours * .75));
+        await AssertSlaReadPaths(ticket.Id, customer.Id, SlaStatus.AtRisk);
+        _clock.Advance(TimeSpan.FromHours(hours * .25));
+        await AssertSlaReadPaths(ticket.Id, customer.Id, SlaStatus.AtRisk);
+        _clock.Advance(TimeSpan.FromTicks(1));
+        await AssertSlaReadPaths(ticket.Id, customer.Id, SlaStatus.Breached);
+        Assert.Equal(due, (await _db.Set<Ticket>().AsNoTracking().SingleAsync(t => t.Id == ticket.Id)).DueAtUtc);
+    }
+
+    [Fact]
+    public async Task SlaStatus_EscalationStartsNewWindowRatherThanUsingCreationOrUpdatedTime()
+    {
+        var ticket = CreateTicket(99, "Escalated SLA", _acme, _technical, TicketPriority.Low, TicketStatus.New);
+        ticket.SetDueDate(_clock.UtcNow.AddHours(72), _clock.UtcNow);
+        _db.Add(ticket);
+        await _db.SaveChangesAsync();
+        _clock.Advance(TimeSpan.FromDays(2));
+        var start = _clock.UtcNow;
+        var due = start.AddHours(24);
+        ticket.Escalate(due, null, start);
+        _db.TicketEscalations.Add(new TicketEscalation(ticket.Id, TicketPriority.Low, TicketPriority.Medium,
+            null, null, ticket.CreatedAtUtc.AddHours(72), due, "Impact increased", "Operator", start));
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        _clock.Advance(TimeSpan.FromHours(12));
+        await AssertSlaReadPaths(ticket.Id, _acme.Id, SlaStatus.WithinSla);
+        _clock.Advance(TimeSpan.FromHours(6));
+        ticket = await _db.Set<Ticket>().SingleAsync(t => t.Id == ticket.Id);
+        ticket.AssignTo(_alex.Id, _clock.UtcNow);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        await AssertSlaReadPaths(ticket.Id, _acme.Id, SlaStatus.AtRisk);
+    }
+
+    [Fact]
+    public async Task SlaStatus_ConfiguredThresholdAndPremiumMinimumAreRespected()
+    {
+        var settings = SlaTestSettings.Create();
+        settings.BaseWindowHours[TicketPriority.Critical] = 1;
+        settings.AtRiskThresholdPercent = 50;
+        _queries = new TicketQueries(_db, _clock, settings);
+        var ticket = CreateTicket(99, "Minimum SLA", _beta, _technical, TicketPriority.Critical, TicketStatus.New);
+        var decision = new SupportDesk.Application.Features.Tickets.Triage.TicketTriagePolicy(settings)
+            .CalculateDeadline(TicketPriority.Critical, CustomerTier.Premium, _clock.UtcNow);
+        Assert.Equal(TimeSpan.FromHours(1), decision.Window);
+        ticket.SetDueDate(decision.DueAtUtc, _clock.UtcNow);
+        _db.Add(ticket);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        _clock.Advance(TimeSpan.FromMinutes(30).Subtract(TimeSpan.FromTicks(1)));
+        await AssertSlaReadPaths(ticket.Id, _beta.Id, SlaStatus.WithinSla);
+        _clock.Advance(TimeSpan.FromTicks(1));
+        await AssertSlaReadPaths(ticket.Id, _beta.Id, SlaStatus.AtRisk);
+    }
+
+    private async Task AssertSlaReadPaths(int ticketId, int customerId, SlaStatus expected)
+    {
+        Assert.Equal(expected, (await _queries.GetDetailAsync(ticketId, CancellationToken.None))!.SlaStatus);
+        var page = await SearchAsync(new TicketQuery { Search = "TCK-0099" });
+        Assert.Equal(expected, Assert.Single(page.Items).SlaStatus);
+        Assert.Equal(expected, (await _queries.GetForCustomerAsync(customerId, CancellationToken.None)).Single(t => t.Id == ticketId).SlaStatus);
+        Assert.Empty(_db.ChangeTracker.Entries());
+    }
+
+    [Theory]
+    [InlineData("detail")]
+    [InlineData("paged")]
+    [InlineData("customer")]
+    public async Task SlaStatus_EachReadCapturesClockExactlyOnce(string readPath)
+    {
+        var clock = new Mock<IClock>();
+        clock.SetupGet(value => value.UtcNow).Returns(_clock.UtcNow);
+        var queries = new TicketQueries(_db, clock.Object, SlaTestSettings.Create());
+        if (readPath == "detail") await queries.GetDetailAsync((await _db.Set<Ticket>().FirstAsync()).Id, CancellationToken.None);
+        else if (readPath == "paged") await queries.GetPagedAsync(new TicketQuery().Normalized(), CancellationToken.None);
+        else await queries.GetForCustomerAsync(_acme.Id, CancellationToken.None);
+        clock.VerifyGet(value => value.UtcNow, Times.Once);
+    }
 
     private Ticket CreateTicket(int number, string title, Customer customer, Category category,
         TicketPriority priority, TicketStatus status, Agent? agent = null)

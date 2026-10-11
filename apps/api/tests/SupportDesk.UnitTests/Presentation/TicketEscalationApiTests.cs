@@ -405,7 +405,7 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
             null, null, null, null, oldest.Reason, oldest.EscalatedBy, oldest.EscalatedAtUtc), history[2]);
         Assert.Equal(matchingTimestamps, first.EscalatedAtUtc == second.EscalatedAtUtc);
 
-        var direct = await new TicketQueries(db, clock).GetEscalationsAsync(ticket.Id, CancellationToken.None);
+        var direct = await new TicketQueries(db, clock, app.Services.GetRequiredService<SlaSettings>()).GetEscalationsAsync(ticket.Id, CancellationToken.None);
         Assert.Equal(history, direct!);
         Assert.Empty(db.ChangeTracker.Entries());
         Assert.Equal(beforeHistory, JsonSerializer.Serialize(await db.TicketEscalations.AsNoTracking().OrderBy(record => record.Id).ToListAsync(), json));
@@ -434,6 +434,33 @@ public sealed class TicketEscalationApiTests : IAsyncLifetime
         Assert.Equal(404, problem.Status);
         Assert.Contains("Ticket", problem.Detail);
         await AssertUnchangedAsync(ticket);
+    }
+
+    [Theory]
+    [InlineData("NotApplicable", 0)]
+    [InlineData("WithinSla", 1)]
+    [InlineData("AtRisk", 0)]
+    [InlineData("Breached", 0)]
+    [InlineData("Met", 0)]
+    public async Task Get_ListAcceptsSlaStatusQueryNames(string slaStatus, int expectedCount)
+    {
+        var ticket = await SeedTicketAsync();
+        using var response = await client.GetAsync($"/api/tickets?slaStatus={slaStatus}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = (await response.Content.ReadFromJsonAsync<SupportDesk.Application.Contracts.Common.PagedResult<TicketListItemDto>>(json))!;
+        Assert.Equal(expectedCount, page.TotalCount);
+        Assert.Equal(expectedCount, page.Items.Count);
+        Assert.All(page.Items, item => Assert.Equal(slaStatus, item.SlaStatus.ToString()));
+        await AssertUnchangedAsync(ticket);
+    }
+
+    [Theory]
+    [InlineData("UnknownStatus")]
+    [InlineData("999")]
+    public async Task Get_ListRejectsInvalidSlaStatusWith400(string slaStatus)
+    {
+        using var response = await client.GetAsync($"/api/tickets?slaStatus={slaStatus}");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     private async Task<Ticket> SeedTicketAsync(TicketPriority priority = TicketPriority.Low, bool isPremium = false,

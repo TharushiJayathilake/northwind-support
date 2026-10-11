@@ -7,6 +7,7 @@ import type {
   TicketStatus,
 } from '../../../types/api';
 import { humanize } from '../../../lib/format';
+import { slaLabels, slaStatuses } from '../slaPresentation';
 
 const statuses: TicketStatus[] = ['New', 'Open', 'InProgress', 'Resolved', 'Closed'];
 const priorities: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
@@ -89,6 +90,17 @@ export function TicketFilters({
       </div>
 
       <div className="filters__row">
+        <div className="field">
+          <label className="field__label" htmlFor="filter-sla">SLA status</label>
+          <select
+            id="filter-sla"
+            value={filters.slaStatus ?? ''}
+            onChange={(event) => onChange({ slaStatus: slaStatuses.find((status) => status === event.target.value) })}
+          >
+            <option value="">All SLA statuses</option>
+            {slaStatuses.map((status) => <option key={status} value={status}>{slaLabels[status].text}</option>)}
+          </select>
+        </div>
         <div className="field">
           <label className="field__label" htmlFor="filter-category">
             Category
