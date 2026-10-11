@@ -73,6 +73,12 @@ npm test                      # dotnet test, then the web tests (Vitest)
 
 Both pass on a clean checkout and neither needs a database.
 
+Ticket filtering tests run the real EF Core `TicketQueries` implementation against a fresh
+in-memory SQLite relational database per test. They cover exact filters, search, combined
+filters, filtered counts, pagination and stable sorting. These automated tests are separate
+from the SQL Server Express smoke checks; SQLite does not prove SQL Server collation or all
+provider-specific behavior.
+
 ## Commands
 
 | Command | What it does |
@@ -87,7 +93,7 @@ Both pass on a clean checkout and neither needs a database.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
+| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters combine with AND and are applied in the database before counting and paging. Search matches title, reference or customer name. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
