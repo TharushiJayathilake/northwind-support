@@ -5,6 +5,7 @@ import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
+import { creationResult, TriageResult } from './components/TriageResult';
 
 export function CreateTicketPage() {
   const reference = useReferenceData();
@@ -33,11 +34,14 @@ export function CreateTicketPage() {
           <p>
             Raised <strong>{created.reference}</strong> for {created.customer.name}.
           </p>
+          <TriageResult result={creationResult(created)} />
           <div className="button-row">
             <button
               type="button"
               className="button button--primary"
-              onClick={() => void navigate(`/tickets/${created.id}`)}
+              onClick={() => void navigate(`/tickets/${created.id}`, {
+                state: { creationResult: creationResult(created) },
+              })}
             >
               Open {created.reference}
             </button>

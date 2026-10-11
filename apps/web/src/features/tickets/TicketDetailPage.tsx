@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ErrorMessage } from '../../components/ErrorMessage';
 import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
@@ -7,12 +7,16 @@ import { EscalationForm } from './components/EscalationForm';
 import { EscalationHistory } from './components/EscalationHistory';
 import { StatusActions } from './components/StatusActions';
 import { TicketSummary } from './components/TicketSummary';
+import { readCreationResult, TriageResult } from './components/TriageResult';
 import { useTicket } from './hooks/useTicket';
 import { useTicketEscalations } from './hooks/useTicketEscalations';
 
 export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
   const ticketId = Number(id);
+  const location = useLocation();
+  const navigationState: unknown = location.state;
+  const created = readCreationResult(navigationState, ticketId);
 
   const { data: ticket, isLoading, error, reload, setData } = useTicket(ticketId);
   const reference = useReferenceData();
@@ -46,6 +50,7 @@ export function TicketDetailPage() {
       </header>
 
       {error && <ErrorMessage message={error} onRetry={() => void reload()} />}
+      {created && <TriageResult result={created} />}
 
       <div className="detail-layout">
         <div className="detail-layout__main">

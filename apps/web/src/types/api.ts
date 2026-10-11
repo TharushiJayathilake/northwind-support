@@ -64,11 +64,19 @@ export interface TicketListItem {
   slaStatus: SlaStatus;
 }
 
+export interface TicketTriage {
+  priorityReason: string;
+  slaReason: string;
+  assignmentReason: string;
+}
+
 export interface TicketDetail {
   id: number;
   reference: string;
   title: string;
   description: string;
+  /** Creation-only explanations; later GET responses may omit these. */
+  triage?: TicketTriage | null;
   status: TicketStatus;
   priority: TicketPriority;
   customer: CustomerContact;
