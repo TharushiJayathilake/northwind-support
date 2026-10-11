@@ -2,13 +2,14 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../../api/client';
 import { ticketsApi } from '../../../api/tickets';
-import { escalatedTicket } from '../../../test/fixtures';
+import { escalatedTicket, ticketDetail } from '../../../test/fixtures';
 import type { EscalateTicketResponse } from '../../../types/api';
 import { EscalationForm } from './EscalationForm';
 
 vi.mock('../../../api/tickets', () => ({ ticketsApi: { escalateTicket: vi.fn() } }));
 const escalate = vi.mocked(ticketsApi.escalateTicket);
 const onEscalated = vi.fn();
+const onConflict = vi.fn();
 
 async function submit(reason = 'Impact increased', actor = 'Temporary actor') {
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: reason } });
@@ -19,7 +20,7 @@ async function submit(reason = 'Impact increased', actor = 'Temporary actor') {
 describe('EscalationForm', () => {
   beforeEach(() => {
     escalate.mockResolvedValue(escalatedTicket());
-    render(<EscalationForm ticketId={12} onEscalated={onEscalated} />);
+    render(<EscalationForm ticket={ticketDetail()} onEscalated={onEscalated} onConflict={onConflict} />);
   });
   afterEach(() => { vi.resetAllMocks(); });
 
@@ -84,6 +85,7 @@ describe('EscalationForm', () => {
       await submit();
       expect(screen.getByRole('alert')).toHaveTextContent(String(message));
       expect(onEscalated).not.toHaveBeenCalled();
+      expect(onConflict).toHaveBeenCalledTimes(status === 409 ? 1 : 0);
       expect(screen.queryByText('Ticket escalated successfully.')).not.toBeInTheDocument();
       expect(screen.getByLabelText('Reason')).toHaveValue('Impact increased');
     });

@@ -48,7 +48,8 @@ describe('Ticket escalation API and refresh', () => {
     const originalLocation = window.location.href;
     await submit();
     expect(fetchMock).toHaveBeenCalledTimes(5);
-    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/escalate'))!;
+    const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/escalate'));
+    if (!post) throw new Error('Expected escalation POST');
     expect(post[0]).toBe('/api/tickets/12/escalate');
     expect(post[1]?.method).toBe('POST');
     expect(JSON.parse(String(post[1]?.body))).toEqual({ reason: 'Impact increased', escalatedBy: 'Temporary actor' });
@@ -60,11 +61,14 @@ describe('Ticket escalation API and refresh', () => {
     expect(screen.getByText('Within SLA')).toBeInTheDocument();
     expect(screen.getByText(formatDateTime(escalatedTicket().ticket.dueAtUtc))).toBeInTheDocument();
     expect(screen.getByText('Ticket escalated successfully.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Escalate ticket' })).toBeDisabled();
+    await act(async () => { fireEvent.submit(originalForm); });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/escalate'))).toHaveLength(1);
     expect(screen.getByRole('form', { name: 'Escalate ticket' })).toBe(originalForm);
     expect(window.location.href).toBe(originalLocation);
   });
 
-  it.each([400, 404, 409])('HTTP %i leaves the existing ticket unchanged and does not refetch', async (status) => {
+  it.each([400, 404])('HTTP %i leaves the existing ticket unchanged and does not refetch', async (status) => {
     fetchMock.mockImplementation(async (input) => String(input).endsWith('/escalate')
       ? new Response(JSON.stringify({ detail: `Escalation rejected (${status})` }), { status })
       : new Response(JSON.stringify(String(input).endsWith('/escalations') ? [] : ticketDetail())));
@@ -80,6 +84,26 @@ describe('Ticket escalation API and refresh', () => {
     expect(screen.getByText('Breached')).toBeInTheDocument();
     expect(screen.getByText(formatDateTime(ticketDetail().dueAtUtc))).toBeInTheDocument();
     expect(screen.queryByText('Ticket escalated successfully.')).not.toBeInTheDocument();
+  });
+
+  it('refreshes current ticket state on 409 without success or false history', async () => {
+    let conflicted = false;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/escalations')) return new Response('[]');
+      if (String(input).endsWith('/escalate')) {
+        conflicted = true;
+        return new Response(JSON.stringify({ detail: 'Another user made this ticket Critical.' }), { status: 409 });
+      }
+      return new Response(JSON.stringify(conflicted ? ticketDetail({ priority: 'Critical' }) : ticketDetail()));
+    });
+    await mount(); await submit();
+    expect(screen.getByRole('alert')).toHaveTextContent('Another user made this ticket Critical.');
+    expect(screen.getByRole('button', { name: 'Escalate ticket' })).toBeDisabled();
+    expect(within(screen.getByRole('complementary')).getByText('Critical')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12')).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/tickets/12/escalations')).toHaveLength(1);
+    expect(screen.queryByText('Ticket escalated successfully.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('article')).not.toBeInTheDocument();
   });
 
   it('preserves the confirmed response if the follow-up detail request fails', async () => {

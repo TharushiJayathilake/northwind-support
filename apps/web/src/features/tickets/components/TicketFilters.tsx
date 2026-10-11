@@ -56,7 +56,7 @@ export function TicketFilters({
             id="filter-status"
             value={filters.status ?? ''}
             onChange={(event) =>
-              onChange({ status: (event.target.value || undefined) as TicketStatus | undefined })
+              onChange({ status: statuses.find((status) => status === event.target.value) })
             }
           >
             <option value="">All statuses</option>
@@ -76,7 +76,7 @@ export function TicketFilters({
             id="filter-priority"
             value={filters.priority ?? ''}
             onChange={(event) =>
-              onChange({ priority: (event.target.value || undefined) as TicketPriority | undefined })
+              onChange({ priority: priorities.find((priority) => priority === event.target.value) })
             }
           >
             <option value="">All priorities</option>
@@ -164,10 +164,11 @@ export function TicketFilters({
             value={`${filters.sortBy}:${filters.sortDirection}`}
             onChange={(event) => {
               const [sortBy, sortDirection] = event.target.value.split(':');
-              onChange({
-                sortBy: sortBy as Filters['sortBy'],
-                sortDirection: sortDirection as Filters['sortDirection'],
-              });
+              if ((sortBy === 'createdAtUtc' || sortBy === 'updatedAtUtc' || sortBy === 'dueAtUtc' ||
+                   sortBy === 'priority' || sortBy === 'status') &&
+                  (sortDirection === 'asc' || sortDirection === 'desc')) {
+                onChange({ sortBy, sortDirection });
+              }
             }}
           >
             <option value="createdAtUtc:desc">Newest first</option>

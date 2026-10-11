@@ -156,7 +156,7 @@ export function CreateTicketForm({ customers, categories, onCreated }: CreateTic
             {...fieldProps}
             value={form.requestedPriority}
             onChange={(event) =>
-              update({ requestedPriority: event.target.value as TicketPriority | '' })
+              update({ requestedPriority: priorities.find((priority) => priority === event.target.value) ?? '' })
             }
           >
             <option value="">No preference</option>

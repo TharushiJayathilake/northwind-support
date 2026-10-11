@@ -70,7 +70,24 @@ export function toErrorMessage(error: unknown, fallback: string): string {
 
 async function readProblem(response: Response): Promise<ProblemDetails | undefined> {
   try {
-    return (await response.json()) as ProblemDetails;
+    const value: unknown = await response.json();
+    if (typeof value !== 'object' || value === null) return;
+    const problem: ProblemDetails = {};
+    if ('detail' in value && typeof value.detail === 'string') problem.detail = value.detail;
+    if ('title' in value && typeof value.title === 'string') problem.title = value.title;
+    if ('status' in value && typeof value.status === 'number') problem.status = value.status;
+    if ('type' in value && typeof value.type === 'string') problem.type = value.type;
+    if ('traceId' in value && typeof value.traceId === 'string') problem.traceId = value.traceId;
+    if ('errors' in value && typeof value.errors === 'object' && value.errors !== null) {
+      const errors: Record<string, string[]> = {};
+      for (const [field, messages] of Object.entries(value.errors)) {
+        if (Array.isArray(messages) && messages.every((message: unknown) => typeof message === 'string')) {
+          errors[field] = messages;
+        }
+      }
+      problem.errors = errors;
+    }
+    return problem;
   } catch {
     // Not every failure has a JSON body - a dead server certainly will not.
     return undefined;

@@ -17,8 +17,9 @@ describe('EscalationHistory', () => {
     expect(old.getByText('Critical')).toBeInTheDocument();
     expect(old.getByText('Previous owner')).toBeInTheDocument();
     expect(old.getByText('Next owner')).toBeInTheDocument();
-    expect(old.getByText(formatUtcDateTime(oldest.fromDueAtUtc!))).toHaveAttribute('datetime', oldest.fromDueAtUtc);
-    expect(old.getByText(formatUtcDateTime(oldest.toDueAtUtc!))).toHaveAttribute('datetime', oldest.toDueAtUtc);
+    if (oldest.fromDueAtUtc === null || oldest.toDueAtUtc === null) throw new Error('Expected audit deadlines');
+    expect(old.getByText(formatUtcDateTime(oldest.fromDueAtUtc))).toHaveAttribute('datetime', oldest.fromDueAtUtc);
+    expect(old.getByText(formatUtcDateTime(oldest.toDueAtUtc))).toHaveAttribute('datetime', oldest.toDueAtUtc);
     expect(old.getByText(formatUtcDateTime(oldest.escalatedAtUtc))).toHaveAttribute('datetime', oldest.escalatedAtUtc);
     expect(old.getByText('Impact increased')).toBeInTheDocument();
     expect(old.getByText('Temporary actor')).toBeInTheDocument();

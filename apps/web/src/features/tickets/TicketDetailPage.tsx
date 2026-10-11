@@ -22,7 +22,7 @@ export function TicketDetailPage() {
   const reference = useReferenceData();
   const history = useTicketEscalations(ticketId);
 
-  if (Number.isNaN(ticketId)) {
+  if (!Number.isSafeInteger(ticketId) || ticketId <= 0) {
     return <ErrorMessage message="That is not a valid ticket reference." />;
   }
 
@@ -60,7 +60,7 @@ export function TicketDetailPage() {
           </div>
 
           <StatusActions ticket={ticket} onUpdated={setData} />
-          <EscalationForm ticketId={ticket.id} onEscalated={async (response) => {
+          <EscalationForm ticket={ticket} onConflict={reload} onEscalated={async (response) => {
             setData(response.ticket);
             await Promise.all([reload(), history.reload()]);
           }} />

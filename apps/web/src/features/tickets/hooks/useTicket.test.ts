@@ -10,6 +10,32 @@ const getTicket = vi.mocked(ticketsApi.getTicket);
 afterEach(() => { vi.resetAllMocks(); });
 
 describe('useTicket refresh', () => {
+  it('hides the previous ticket while loading a different ticket', async () => {
+    getTicket.mockResolvedValueOnce(ticketDetail());
+    const { result, rerender } = renderHook(({ id }) => useTicket(id), { initialProps: { id: 12 } });
+    await act(async () => {});
+    getTicket.mockImplementationOnce(() => new Promise(() => {}));
+    rerender({ id: 13 });
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(true);
+  });
+
+  it('does not request invalid ticket IDs', () => {
+    renderHook(() => useTicket(-1));
+    expect(getTicket).not.toHaveBeenCalled();
+  });
+
+  it('ignores retained callbacks after unmount', async () => {
+    getTicket.mockResolvedValue(ticketDetail());
+    const { result, unmount } = renderHook(() => useTicket(12));
+    await act(async () => {});
+    const old = result.current;
+    unmount();
+    await old.reload();
+    old.setData(escalatedTicket().ticket);
+    expect(getTicket).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a stale GET after an escalation result and a fresh GET', async () => {
     let resolveOld: (ticket: TicketDetail) => void = () => { throw new Error('No pending GET'); };
     getTicket.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));

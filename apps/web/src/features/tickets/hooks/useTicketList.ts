@@ -4,6 +4,10 @@ import { ticketsApi } from '../../../api/tickets';
 import type { PagedResult, TicketFilters, TicketListItem } from '../../../types/api';
 
 const DEBOUNCE_MS = 300;
+const filterKeys: readonly (keyof TicketFilters)[] = [
+  'search', 'status', 'priority', 'slaStatus', 'categoryId', 'customerId',
+  'assignedAgentId', 'unassignedOnly', 'page', 'pageSize', 'sortBy', 'sortDirection',
+];
 
 export const emptyFilters: TicketFilters = {
   search: '',
@@ -54,7 +58,7 @@ export function useTicketList() {
     const requests = requestState.current;
     const previous = previousFilters.current;
     const searchChanged = filters.search !== previous.search;
-    const otherFilterChanged = (Object.keys(filters) as (keyof TicketFilters)[]).some(
+    const otherFilterChanged = filterKeys.some(
       (key) => key !== 'search'
         // A search edit also resets the page; it must still be debounced.
         && !(key === 'page' && searchChanged && filters.page === 1)
