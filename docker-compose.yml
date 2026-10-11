@@ -3,13 +3,12 @@
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: supportdesk-sql
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Local_Dev_Password1}"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}"
       MSSQL_PID: Developer
     ports:
-      - "1433:1433"
+      - "127.0.0.1:${SQLSERVER_PORT:-1433}:1433"
     volumes:
       - supportdesk-sql:/var/opt/mssql
     healthcheck:
@@ -22,6 +21,24 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True;Encrypt=True"
+      Jwt__SigningKey: "${Jwt__SigningKey:?Set a random JWT signing key in .env}"
+      Jwt__Issuer: "${Jwt__Issuer:-NorthwindSupport}"
+      Jwt__Audience: "${Jwt__Audience:-NorthwindWeb}"
+      Jwt__LifetimeMinutes: "${Jwt__LifetimeMinutes:-60}"
+    ports:
+      - "127.0.0.1:5080:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
 
 volumes:
   supportdesk-sql:

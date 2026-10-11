@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+**/node_modules
+**/bin
+**/obj
+**/.env
+**/.env.*
+**/appsettings.*.local.json
+**/secrets.json
+apps/web
+**/TestResults
+**/coverage
+**/*.mdf
+**/*.ldf
